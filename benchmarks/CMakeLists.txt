@@ -1,0 +1,2 @@
+add_executable(plastix_benchmarks bench_plastix.cpp)
+target_link_libraries(plastix_benchmarks PRIVATE plastix benchmark::benchmark_main)
