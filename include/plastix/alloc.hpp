@@ -71,7 +71,19 @@ public:
     return Field[Id];
   };
 
+  template <typename FieldTag> const auto &Get(AllocId<T> Id) const {
+    constexpr auto Index = IndexOf<FieldTag>();
+    const auto &Field = std::get<Index>(FieldPtrs);
+    return Field[Id];
+  };
+
   auto &Get(AllocId<T> Id)
+    requires(sizeof...(Fields) == 1)
+  {
+    return std::get<0>(FieldPtrs)[Id];
+  };
+
+  const auto &Get(AllocId<T> Id) const
     requires(sizeof...(Fields) == 1)
   {
     return std::get<0>(FieldPtrs)[Id];

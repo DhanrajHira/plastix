@@ -33,6 +33,7 @@ public:
       UnitAlloc.Allocate();
     UnitRange Prev{0, InputDim};
     ((Prev = Layers(UnitAlloc, ConnAlloc, Prev)), ...);
+    OutputRange = Prev;
   }
 
   Network(size_t InputDim, size_t OutputDim = 1)
@@ -127,6 +128,14 @@ public:
     DoAddConnections();
   }
 
+  std::span<const float> GetOutput() const {
+    const float *Base =
+        Step % 2 == 0
+            ? &UnitAlloc.template Get<ActivationATag>(OutputRange.Begin)
+            : &UnitAlloc.template Get<ActivationBTag>(OutputRange.Begin);
+    return {Base, OutputRange.Size()};
+  }
+
   auto &GetConnAlloc() { return ConnAlloc; }
   auto &GetUnitAlloc() { return UnitAlloc; }
 
@@ -145,6 +154,7 @@ private:
 
   size_t NumInput;
   size_t Step = 0;
+  UnitRange OutputRange;
   UnitAllocator UnitAlloc;
   ConnAllocator ConnAlloc;
   GlobalState Globals;

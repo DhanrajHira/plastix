@@ -333,4 +333,65 @@ TEST(LayerBuilderTest, MultiLayerForwardPass) {
   EXPECT_FLOAT_EQ(UA.Get<plastix::ActivationATag>(4), 4.0f);
 }
 
+// ---------------------------------------------------------------------------
+// GetOutput tests
+// ---------------------------------------------------------------------------
+
+TEST(OutputTest, SingleLayerGetOutput) {
+  // 2 inputs, 1 output. Output = 3+5 = 8.
+  TestNetwork Net(2, 1);
+  std::array<float, 2> In = {3.0f, 5.0f};
+  Net.DoForwardPass(In);
+
+  auto Out = Net.GetOutput();
+  ASSERT_EQ(Out.size(), 1u);
+  EXPECT_FLOAT_EQ(Out[0], 8.0f);
+}
+
+TEST(OutputTest, MultipleOutputUnits) {
+  // 3 inputs, 2 outputs. Each output = sum of inputs = 1+2+3 = 6.
+  TestNetwork Net(3, 2);
+  std::array<float, 3> In = {1.0f, 2.0f, 3.0f};
+  Net.DoForwardPass(In);
+
+  auto Out = Net.GetOutput();
+  ASSERT_EQ(Out.size(), 2u);
+  EXPECT_FLOAT_EQ(Out[0], 6.0f);
+  EXPECT_FLOAT_EQ(Out[1], 6.0f);
+}
+
+TEST(OutputTest, MultiLayerGetOutput) {
+  // 2 inputs -> 2 hidden -> 1 output, weights=1.
+  // Pipelined: output is 0 after first step, 4 after second.
+  TestNetwork Net(2, FC{2}, FC{1});
+  std::array<float, 2> In = {1.0f, 1.0f};
+
+  Net.DoForwardPass(In);
+  auto Out1 = Net.GetOutput();
+  ASSERT_EQ(Out1.size(), 1u);
+  EXPECT_FLOAT_EQ(Out1[0], 0.0f);
+
+  Net.DoForwardPass(In);
+  auto Out2 = Net.GetOutput();
+  ASSERT_EQ(Out2.size(), 1u);
+  EXPECT_FLOAT_EQ(Out2[0], 4.0f);
+}
+
+TEST(OutputTest, GetOutputIsConst) {
+  const TestNetwork Net(2, 1);
+  auto Out = Net.GetOutput();
+  EXPECT_EQ(Out.size(), 1u);
+}
+
+TEST(OutputTest, DoStepGetOutput) {
+  // Verify GetOutput works after DoStep (full pipeline).
+  TestNetwork Net(2, 1);
+  std::array<float, 2> In = {2.0f, 3.0f};
+  Net.DoStep(In);
+
+  auto Out = Net.GetOutput();
+  ASSERT_EQ(Out.size(), 1u);
+  EXPECT_FLOAT_EQ(Out[0], 5.0f);
+}
+
 } // namespace plastix_test
