@@ -239,4 +239,104 @@ TEST(PassTest, BackwardPassBasic) {
   EXPECT_FLOAT_EQ(UA.Get<plastix::ActivationBTag>(2), 8.0f);
 }
 
+// ---------------------------------------------------------------------------
+// Layer builder tests
+// ---------------------------------------------------------------------------
+
+using FC = plastix::FullyConnected;
+
+TEST(LayerBuilderTest, MultiLayerBuilder) {
+  // 3 inputs -> 5 hidden -> 1 output = 9 units
+  // Layer 1: 5 units, each connected to 3 inputs = 5 pages (3 < 7 slots)
+  // Layer 2: 1 unit connected to 5 hidden = 1 page (5 < 7 slots)
+  // Total: 6 pages
+  TestNetwork Net(3, FC{5}, FC{1});
+
+  auto &UA = Net.GetUnitAlloc();
+  auto &CA = Net.GetConnAlloc();
+
+  EXPECT_EQ(UA.Size(), 9u);
+  EXPECT_EQ(CA.Size(), 6u);
+
+  // Hidden layer pages (units 3-7, each with 1 page of 3 connections)
+  for (size_t I = 0; I < 5; ++I) {
+    auto &Page = CA.Get<plastix::ConnPageMarker>(I);
+    EXPECT_EQ(Page.ToUnitIdx, 3 + I);
+    EXPECT_EQ(Page.Count, 3u);
+    for (size_t S = 0; S < 3; ++S) {
+      EXPECT_EQ(Page.Conn[S].first, S);
+      EXPECT_FLOAT_EQ(Page.Conn[S].second, 1.0f);
+    }
+  }
+
+  // Output layer page (unit 8, connected to units 3-7)
+  auto &OutPage = CA.Get<plastix::ConnPageMarker>(5);
+  EXPECT_EQ(OutPage.ToUnitIdx, 8u);
+  EXPECT_EQ(OutPage.Count, 5u);
+  for (size_t S = 0; S < 5; ++S) {
+    EXPECT_EQ(OutPage.Conn[S].first, 3 + S);
+    EXPECT_FLOAT_EQ(OutPage.Conn[S].second, 1.0f);
+  }
+}
+
+TEST(LayerBuilderTest, MultiLayerMultiplePages) {
+  // 10 inputs -> 2 hidden -> 1 output = 13 units
+  // Layer 1: 2 units, each connected to 10 inputs = 2*2 = 4 pages
+  // Layer 2: 1 unit connected to 2 hidden = 1 page
+  // Total: 5 pages
+  TestNetwork Net(10, FC{2}, FC{1});
+
+  auto &UA = Net.GetUnitAlloc();
+  auto &CA = Net.GetConnAlloc();
+
+  EXPECT_EQ(UA.Size(), 13u);
+  EXPECT_EQ(CA.Size(), 5u);
+}
+
+TEST(LayerBuilderTest, CustomInitWeight) {
+  TestNetwork Net(2, FC{1, 0.5f});
+
+  auto &CA = Net.GetConnAlloc();
+  EXPECT_EQ(CA.Size(), 1u);
+
+  auto &Page = CA.Get<plastix::ConnPageMarker>(0);
+  EXPECT_EQ(Page.Count, 2u);
+  for (size_t S = 0; S < 2; ++S)
+    EXPECT_FLOAT_EQ(Page.Conn[S].second, 0.5f);
+}
+
+TEST(LayerBuilderTest, ThreeLayerBuilder) {
+  // 4 inputs -> 3 hidden1 -> 2 hidden2 -> 1 output = 10 units
+  TestNetwork Net(4, FC{3}, FC{2}, FC{1});
+
+  auto &UA = Net.GetUnitAlloc();
+  EXPECT_EQ(UA.Size(), 10u);
+}
+
+TEST(LayerBuilderTest, MultiLayerForwardPass) {
+  // 2 inputs -> 2 hidden -> 1 output, all weights=1
+  // Pipelined semantics: signals propagate one layer per DoForwardPass call.
+  TestNetwork Net(2, FC{2}, FC{1});
+
+  auto &UA = Net.GetUnitAlloc();
+
+  // Step 0: inputs={1,1}. Hidden reads previous buffer (zeros) => hidden=0.
+  // Output reads previous buffer (zeros) => output=0.
+  std::array<float, 2> In = {1.0f, 1.0f};
+  Net.DoForwardPass(In);
+  // Step was 0 (even), wrote to B buffer.
+  // Hidden units (2,3) get prev activations of inputs (A buffer = 0 initially).
+  // Actually inputs are written to BOTH buffers, so prev=A has 1.0.
+  // Hidden[2] = 1+1 = 2, Hidden[3] = 1+1 = 2
+  EXPECT_FLOAT_EQ(UA.Get<plastix::ActivationBTag>(2), 2.0f);
+  EXPECT_FLOAT_EQ(UA.Get<plastix::ActivationBTag>(3), 2.0f);
+  // Output[4] reads previous activation of hidden (A buffer = 0 initially)
+  EXPECT_FLOAT_EQ(UA.Get<plastix::ActivationBTag>(4), 0.0f);
+
+  // Step 1: same inputs. Hidden reads prev (B) = {1,1} => 2 again.
+  // Output reads prev (B) hidden = {2,2} => 4.
+  Net.DoForwardPass(In);
+  EXPECT_FLOAT_EQ(UA.Get<plastix::ActivationATag>(4), 4.0f);
+}
+
 } // namespace plastix_test
