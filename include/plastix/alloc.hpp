@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cstddef>
+#include <new>
 #include <sys/mman.h>
 #include <tuple>
 
@@ -56,6 +57,11 @@ public:
       Count.fetch_sub(1);
       return static_cast<size_t>(-1);
     }
+    std::apply(
+        [Id](auto &...Ptrs) {
+          ((::new (&Ptrs[Id]) typename Fields::Type()), ...);
+        },
+        FieldPtrs);
     return Id;
   };
 
@@ -70,6 +76,8 @@ public:
   {
     return std::get<0>(FieldPtrs)[Id];
   };
+
+  size_t Size() const { return Count.load(); }
 };
 
 namespace detail {
