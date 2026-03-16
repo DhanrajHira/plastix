@@ -137,16 +137,14 @@ TEST(PassTest, ForwardPassIdentity) {
   Net.DoForwardPass(In);
 
   auto &UA = Net.GetUnitAlloc();
-  // After step 0->1 (odd step), current buffer was B (even step when written).
-  // Step is now 1. Previous = B (the buffer just written).
-  // But we want the values written during the pass — those are in the buffer
-  // that was "current" during the pass (step=0, even => B).
+  // Step 0 (even): inputs written to A (previous), output written to B
+  // (current).
   float Out = UA.Get<plastix::ActivationBTag>(2);
   EXPECT_FLOAT_EQ(Out, 8.0f);
 
-  // Inputs should also be in the current (B) buffer.
-  EXPECT_FLOAT_EQ(UA.Get<plastix::ActivationBTag>(0), 3.0f);
-  EXPECT_FLOAT_EQ(UA.Get<plastix::ActivationBTag>(1), 5.0f);
+  // Inputs are in the previous (A) buffer only.
+  EXPECT_FLOAT_EQ(UA.Get<plastix::ActivationATag>(0), 3.0f);
+  EXPECT_FLOAT_EQ(UA.Get<plastix::ActivationATag>(1), 5.0f);
 }
 
 TEST(PassTest, ForwardPassCustomPolicy) {
@@ -189,12 +187,10 @@ TEST(PassTest, ConsecutiveForwardPasses) {
   std::array<float, 2> In2 = {4.0f, 5.0f};
   Net.DoForwardPass(In2);
   EXPECT_FLOAT_EQ(UA.Get<plastix::ActivationATag>(2), 9.0f);
-  // Inputs in A buffer
-  EXPECT_FLOAT_EQ(UA.Get<plastix::ActivationATag>(0), 4.0f);
-  EXPECT_FLOAT_EQ(UA.Get<plastix::ActivationATag>(1), 5.0f);
-  // Previous buffer (B) has new inputs (overwritten) but old output
+  // Inputs written to previous (B) only.
   EXPECT_FLOAT_EQ(UA.Get<plastix::ActivationBTag>(0), 4.0f);
   EXPECT_FLOAT_EQ(UA.Get<plastix::ActivationBTag>(1), 5.0f);
+  // Previous output in B untouched by this pass.
   EXPECT_FLOAT_EQ(UA.Get<plastix::ActivationBTag>(2), 3.0f);
 }
 
@@ -234,8 +230,9 @@ TEST(PassTest, BackwardPassBasic) {
   EXPECT_FLOAT_EQ(UA.Get<plastix::BackwardAccTag>(2), 0.0f);
 
   // Activations are untouched by backward pass.
-  EXPECT_FLOAT_EQ(UA.Get<plastix::ActivationBTag>(0), 3.0f);
-  EXPECT_FLOAT_EQ(UA.Get<plastix::ActivationBTag>(1), 5.0f);
+  // Inputs in A (previous at step 0), output in B (current at step 0).
+  EXPECT_FLOAT_EQ(UA.Get<plastix::ActivationATag>(0), 3.0f);
+  EXPECT_FLOAT_EQ(UA.Get<plastix::ActivationATag>(1), 5.0f);
   EXPECT_FLOAT_EQ(UA.Get<plastix::ActivationBTag>(2), 8.0f);
 }
 
@@ -320,21 +317,18 @@ TEST(LayerBuilderTest, MultiLayerForwardPass) {
 
   auto &UA = Net.GetUnitAlloc();
 
-  // Step 0: inputs={1,1}. Hidden reads previous buffer (zeros) => hidden=0.
-  // Output reads previous buffer (zeros) => output=0.
+  // Step 0 (even): inputs written to A (previous), accumulation writes to B.
+  // Hidden reads prev inputs from A = {1,1}. Hidden[2]=Hidden[3]=2.
+  // Output reads prev hidden from A (still 0) => Output[4]=0.
   std::array<float, 2> In = {1.0f, 1.0f};
   Net.DoForwardPass(In);
-  // Step was 0 (even), wrote to B buffer.
-  // Hidden units (2,3) get prev activations of inputs (A buffer = 0 initially).
-  // Actually inputs are written to BOTH buffers, so prev=A has 1.0.
-  // Hidden[2] = 1+1 = 2, Hidden[3] = 1+1 = 2
   EXPECT_FLOAT_EQ(UA.Get<plastix::ActivationBTag>(2), 2.0f);
   EXPECT_FLOAT_EQ(UA.Get<plastix::ActivationBTag>(3), 2.0f);
-  // Output[4] reads previous activation of hidden (A buffer = 0 initially)
   EXPECT_FLOAT_EQ(UA.Get<plastix::ActivationBTag>(4), 0.0f);
 
-  // Step 1: same inputs. Hidden reads prev (B) = {1,1} => 2 again.
-  // Output reads prev (B) hidden = {2,2} => 4.
+  // Step 1 (odd): inputs written to B (previous), accumulation writes to A.
+  // Hidden reads prev inputs from B = {1,1} => 2. Output reads prev hidden
+  // from B = {2,2} => 4. Signal has now propagated through both layers.
   Net.DoForwardPass(In);
   EXPECT_FLOAT_EQ(UA.Get<plastix::ActivationATag>(4), 4.0f);
 }

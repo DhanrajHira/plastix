@@ -1,87 +1,18 @@
 #ifndef PLASTIX_PLASTIX_HPP
 #define PLASTIX_PLASTIX_HPP
 
-#include "plastix/alloc.hpp"
+#include "plastix/conn.hpp"
+#include "plastix/layers.hpp"
 #include "plastix/traits.hpp"
-#include <concepts>
+#include "plastix/unit_state.hpp"
 #include <cstddef>
-#include <cstdint>
-#include <ranges>
 #include <span>
 #include <type_traits>
 
 namespace plastix {
 
-#define PLASTIX_SOA_MODE_TAGS
-#include "plastix/soa.hpp"
-#include "unit_state.inc"
-
-#define PLASTIX_SOA_MODE_ALLOC
-#include "plastix/soa.hpp"
-#include "unit_state.inc"
-
-#define PLASTIX_SOA_MODE_HANDLE
-#include "plastix/soa.hpp"
-#include "unit_state.inc"
-
 /// Returns the library version as a string.
 const char *version();
-
-constexpr static size_t ConnPageSlotSize = 7;
-
-struct ConnPage {
-  uint32_t ToUnitIdx;
-  uint32_t Count;
-  std::array<std::pair<uint32_t, float>, ConnPageSlotSize> Conn;
-};
-
-struct ConnectionState {};
-struct ConnPageMarker {};
-
-using ConnStateAllocator =
-    alloc::SOAAllocator<ConnectionState,
-                        alloc::SOAField<ConnPageMarker, ConnPage>>;
-
-struct UnitRange {
-  size_t Begin;
-  size_t End;
-  size_t Size() const { return End - Begin; }
-};
-
-template <typename B, typename UA, typename CA>
-concept LayerBuilder = requires(B Builder, UA &U, CA &C, UnitRange R) {
-  { Builder(U, C, R) } -> std::same_as<UnitRange>;
-};
-
-struct FullyConnected {
-  size_t NumUnits;
-  float InitWeight = 1.0f;
-
-  template <typename UnitAlloc, typename ConnAlloc>
-  UnitRange operator()(UnitAlloc &UA, ConnAlloc &CA,
-                       UnitRange PrevLayer) const {
-    size_t Begin = UA.Size();
-    for (size_t I = 0; I < NumUnits; ++I)
-      UA.Allocate();
-
-    for (size_t U = Begin; U < Begin + NumUnits; ++U) {
-      size_t SlotIdx = 0;
-      auto PageId = CA.Allocate();
-      for (size_t Src = PrevLayer.Begin; Src < PrevLayer.End; ++Src) {
-        if (SlotIdx == ConnPageSlotSize) {
-          PageId = CA.Allocate();
-          SlotIdx = 0;
-        }
-        auto &Page = CA.template Get<ConnPageMarker>(PageId);
-        Page.ToUnitIdx = U;
-        Page.Count = SlotIdx + 1;
-        Page.Conn[SlotIdx] = {static_cast<uint32_t>(Src), InitWeight};
-        ++SlotIdx;
-      }
-    }
-    return {Begin, Begin + NumUnits};
-  }
-};
 
 // ---------------------------------------------------------------------------
 // Network
@@ -112,10 +43,8 @@ public:
   void DoForwardPass(std::span<const float> Inputs) {
     using FP = typename Traits::ForwardPass;
 
-    for (size_t I = 0; I < NumInput; ++I) {
-      CurrentActivation(I) = Inputs[I];
+    for (size_t I = 0; I < NumInput; ++I)
       PreviousActivation(I) = Inputs[I];
-    }
 
     size_t CurDst = static_cast<size_t>(-1);
     float Acc = 0.0f;
