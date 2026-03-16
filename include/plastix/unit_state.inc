@@ -1,0 +1,5 @@
+SOA_TYPE(UnitState)
+FIELD(ActivationA, float)
+FIELD(ActivationB, float)
+FIELD(BackwardAcc, float)
+SOA_END()

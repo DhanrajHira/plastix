@@ -1,3 +1,3 @@
-add_executable(plastix_tests test_plastix.cpp test_alloc.cpp)
+add_executable(plastix_tests test_plastix.cpp test_alloc.cpp test_soa.cpp)
 target_link_libraries(plastix_tests PRIVATE plastix GTest::gtest_main)
 add_test(NAME plastix_tests COMMAND plastix_tests)
