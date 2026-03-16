@@ -11,15 +11,17 @@
 #define SOA_TYPE(Name)                                                         \
   struct Name {};                                                              \
   using Name##Id = plastix::alloc::AllocId<Name>;
-#define FIELD(Name, Type) struct Name##Tag {};
+#define FIELD(Name, Type)                                                      \
+  struct Name##Tag {};
 #define SOA_END()
 
 #elif defined(PLASTIX_SOA_MODE_ALLOC)
 #undef PLASTIX_SOA_MODE_ALLOC
 
-#define SOA_TYPE(Name) using Name##Allocator = plastix::alloc::SOAAllocator<Name
+#define SOA_TYPE(Name)                                                         \
+  using Name##Allocator = plastix::alloc::SOAAllocator < Name
 #define FIELD(Name, Type) , plastix::alloc::SOAField<Name##Tag, Type>
-#define SOA_END() >;
+#define SOA_END() > ;
 
 #elif defined(PLASTIX_SOA_MODE_HANDLE)
 #undef PLASTIX_SOA_MODE_HANDLE

@@ -106,8 +106,7 @@ public:
   }
 
   void DoBackwardPass() {
-    if constexpr (std::is_same_v<typename Traits::BackwardPass,
-                                 NoBackwardPass>)
+    if constexpr (std::is_same_v<typename Traits::BackwardPass, NoBackwardPass>)
       return;
     else {
       using BP = typename Traits::BackwardPass;

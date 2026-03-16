@@ -60,12 +60,8 @@ struct DefaultForwardPass {
 // Sentinel noop policies — satisfy their concepts but DoX() methods compile
 // out the entire loop body via if constexpr when these are detected.
 struct NoBackwardPass {
-  static float Accumulate(auto &, size_t, auto &, float, float) {
-    return 0.0f;
-  }
-  static float CalculateAndApply(auto &, size_t, auto &, float) {
-    return 0.0f;
-  }
+  static float Accumulate(auto &, size_t, auto &, float, float) { return 0.0f; }
+  static float CalculateAndApply(auto &, size_t, auto &, float) { return 0.0f; }
 };
 
 struct NoUpdateUnit {

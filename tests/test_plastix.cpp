@@ -4,9 +4,7 @@
 #include <array>
 #include <cmath>
 
-TEST(PlastixTest, Version) {
-  EXPECT_STREQ(plastix::version(), "0.1.0");
-}
+TEST(PlastixTest, Version) { EXPECT_STREQ(plastix::version(), "0.1.0"); }
 
 namespace plastix_test {
 
@@ -205,9 +203,7 @@ struct GradientBackwardPass {
                           float Activation) {
     return Weight * Activation;
   }
-  static float CalculateAndApply(auto &, size_t, auto &, float) {
-    return 0.0f;
-  }
+  static float CalculateAndApply(auto &, size_t, auto &, float) { return 0.0f; }
 };
 
 struct GradientBackwardTraits
