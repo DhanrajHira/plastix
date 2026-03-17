@@ -78,10 +78,6 @@ public:
     else {
       using BP = typename Traits::BackwardPass;
 
-      size_t NumUnits = UnitAlloc.Size();
-      for (size_t I = 0; I < NumUnits; ++I)
-        UnitAlloc.template Get<BackwardAccTag>(I) = 0.0f;
-
       for (size_t P = 0; P < ConnAlloc.Size(); ++P) {
         auto &Page = ConnAlloc.template Get<ConnPageMarker>(P);
         float DstAct = PreviousActivation(Page.ToUnitIdx);
@@ -92,9 +88,12 @@ public:
         }
       }
 
-      for (size_t I = 0; I < NumUnits; ++I)
+      size_t NumUnits = UnitAlloc.Size();
+      for (size_t I = 0; I < NumUnits; ++I) {
         BP::CalculateAndApply(UnitAlloc, I, Globals,
                               UnitAlloc.template Get<BackwardAccTag>(I));
+        UnitAlloc.template Get<BackwardAccTag>(I) = 0.0f;
+      }
     }
   }
 
