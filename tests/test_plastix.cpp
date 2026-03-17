@@ -394,4 +394,119 @@ TEST(OutputTest, DoStepGetOutput) {
   EXPECT_FLOAT_EQ(Out[0], 5.0f);
 }
 
+// ---------------------------------------------------------------------------
+// Update unit state tests
+// ---------------------------------------------------------------------------
+
+struct SumWeightsUpdateUnit {
+  using Partial = float;
+  static Partial Map(auto &, size_t, size_t, auto &, float W) { return W; }
+  static Partial Combine(Partial A, Partial B) { return A + B; }
+  static void Apply(auto &U, size_t Id, auto &, Partial Acc) {
+    U.template Get<plastix::BackwardAccTag>(Id) = Acc;
+  }
+};
+
+struct UpdateUnitTraits
+    : plastix::DefaultNetworkTraits<plastix::UnitStateAllocator,
+                                    plastix::ConnStateAllocator> {
+  using UpdateUnit = SumWeightsUpdateUnit;
+};
+
+TEST(UpdateTest, UpdateUnitStateMapReduce) {
+  // 2 inputs, 1 output, weights=1.0.
+  // Map returns weight, Combine sums, Apply writes to BackwardAcc.
+  // Output unit (id=2) has 2 incoming connections with weight=1 each => Acc=2.
+  // Input units (id=0,1) have no incoming connections => Acc=0.
+  plastix::Network<UpdateUnitTraits> Net(2, 1);
+  std::array<float, 2> In = {1.0f, 1.0f};
+  Net.DoForwardPass(In);
+  Net.DoUpdateUnitState();
+
+  auto &UA = Net.GetUnitAlloc();
+  EXPECT_FLOAT_EQ(UA.Get<plastix::BackwardAccTag>(0), 0.0f);
+  EXPECT_FLOAT_EQ(UA.Get<plastix::BackwardAccTag>(1), 0.0f);
+  EXPECT_FLOAT_EQ(UA.Get<plastix::BackwardAccTag>(2), 2.0f);
+}
+
+TEST(UpdateTest, UpdateUnitStateMultiplePages) {
+  // 10 inputs, 1 output (spans 2 conn pages), weights=1.0.
+  // Output unit accumulates 10 weights => Acc=10.
+  plastix::Network<UpdateUnitTraits> Net(10, 1);
+  std::array<float, 10> In;
+  In.fill(1.0f);
+  Net.DoForwardPass(In);
+  Net.DoUpdateUnitState();
+
+  auto &UA = Net.GetUnitAlloc();
+  EXPECT_FLOAT_EQ(UA.Get<plastix::BackwardAccTag>(10), 10.0f);
+  for (size_t I = 0; I < 10; ++I)
+    EXPECT_FLOAT_EQ(UA.Get<plastix::BackwardAccTag>(I), 0.0f);
+}
+
+// ---------------------------------------------------------------------------
+// Update connection state tests
+// ---------------------------------------------------------------------------
+
+struct WeightDecayUpdateConn {
+  static void UpdateIncomingConnection(auto &, size_t, size_t, auto &,
+                                       float &W) {
+    W *= 0.5f;
+  }
+  static void UpdateOutgoingConnection(auto &, size_t, size_t, auto &,
+                                       float &) {}
+};
+
+struct UpdateConnTraits
+    : plastix::DefaultNetworkTraits<plastix::UnitStateAllocator,
+                                    plastix::ConnStateAllocator> {
+  using UpdateConn = WeightDecayUpdateConn;
+};
+
+TEST(UpdateTest, UpdateConnStateWeightDecay) {
+  // 2 inputs, 1 output, weights=1.0.
+  // UpdateIncomingConnection halves weight => all weights become 0.5.
+  plastix::Network<UpdateConnTraits> Net(2, 1);
+  std::array<float, 2> In = {1.0f, 1.0f};
+  Net.DoForwardPass(In);
+  Net.DoUpdateConnectionState();
+
+  auto &CA = Net.GetConnAlloc();
+  auto &Page = CA.Get<plastix::ConnPageMarker>(0);
+  EXPECT_FLOAT_EQ(Page.Conn[0].second, 0.5f);
+  EXPECT_FLOAT_EQ(Page.Conn[1].second, 0.5f);
+}
+
+// ---------------------------------------------------------------------------
+// DoStep with update policies
+// ---------------------------------------------------------------------------
+
+struct DoStepUpdateTraits
+    : plastix::DefaultNetworkTraits<plastix::UnitStateAllocator,
+                                    plastix::ConnStateAllocator> {
+  using UpdateUnit = SumWeightsUpdateUnit;
+  using UpdateConn = WeightDecayUpdateConn;
+};
+
+TEST(UpdateTest, DoStepWithUpdate) {
+  // Full pipeline: forward + update unit + update conn.
+  // After DoStep: BackwardAcc[2]=2 (sum of weights), weights halved to 0.5.
+  plastix::Network<DoStepUpdateTraits> Net(2, 1);
+  std::array<float, 2> In = {3.0f, 4.0f};
+  Net.DoStep(In);
+
+  auto &UA = Net.GetUnitAlloc();
+  EXPECT_FLOAT_EQ(UA.Get<plastix::BackwardAccTag>(2), 2.0f);
+
+  auto &CA = Net.GetConnAlloc();
+  auto &Page = CA.Get<plastix::ConnPageMarker>(0);
+  EXPECT_FLOAT_EQ(Page.Conn[0].second, 0.5f);
+  EXPECT_FLOAT_EQ(Page.Conn[1].second, 0.5f);
+
+  // Output should still be correct from forward pass: 3+4=7.
+  auto Out = Net.GetOutput();
+  ASSERT_EQ(Out.size(), 1u);
+  EXPECT_FLOAT_EQ(Out[0], 7.0f);
+}
+
 } // namespace plastix_test

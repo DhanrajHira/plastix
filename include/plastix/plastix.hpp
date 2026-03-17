@@ -101,10 +101,51 @@ public:
   void DoUpdateUnitState() {
     if constexpr (std::is_same_v<typename Traits::UpdateUnit, NoUpdateUnit>)
       return;
+    else {
+      using UP = typename Traits::UpdateUnit;
+      using Partial = typename UP::Partial;
+
+      for (size_t P = 0; P < ConnAlloc.Size(); ++P) {
+        auto &Page = ConnAlloc.template Get<ConnPageMarker>(P);
+        auto &Acc = UnitAlloc.template Get<UpdateAccTag>(Page.ToUnitIdx);
+        for (size_t S = 0; S < Page.Count; ++S) {
+          auto [SrcId, Weight] = Page.Conn[S];
+          Acc = UP::Combine(Acc, UP::Map(UnitAlloc, Page.ToUnitIdx, SrcId,
+                                         Globals, Weight));
+        }
+      }
+
+      size_t NumUnits = UnitAlloc.Size();
+      for (size_t I = 0; I < NumUnits; ++I) {
+        auto &Acc = UnitAlloc.template Get<UpdateAccTag>(I);
+        UP::Apply(UnitAlloc, I, Globals, Acc);
+        Acc = Partial{};
+      }
+    }
   }
+
   void DoUpdateConnectionState() {
     if constexpr (std::is_same_v<typename Traits::UpdateConn, NoUpdateConn>)
       return;
+    else {
+      using UP = typename Traits::UpdateConn;
+
+      for (size_t P = 0; P < ConnAlloc.Size(); ++P) {
+        auto &Page = ConnAlloc.template Get<ConnPageMarker>(P);
+        for (size_t S = 0; S < Page.Count; ++S)
+          UP::UpdateIncomingConnection(UnitAlloc, Page.ToUnitIdx,
+                                       Page.Conn[S].first, Globals,
+                                       Page.Conn[S].second);
+      }
+
+      for (size_t P = 0; P < ConnAlloc.Size(); ++P) {
+        auto &Page = ConnAlloc.template Get<ConnPageMarker>(P);
+        for (size_t S = 0; S < Page.Count; ++S)
+          UP::UpdateOutgoingConnection(UnitAlloc, Page.Conn[S].first,
+                                       Page.ToUnitIdx, Globals,
+                                       Page.Conn[S].second);
+      }
+    }
   }
   void DoPruneUnits() {
     if constexpr (std::is_same_v<typename Traits::PruneUnit, NoPruneUnit>)
