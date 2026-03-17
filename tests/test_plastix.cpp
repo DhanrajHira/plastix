@@ -510,4 +510,131 @@ TEST(UpdateTest, DoStepWithUpdate) {
   EXPECT_FLOAT_EQ(Out[0], 7.0f);
 }
 
+// ---------------------------------------------------------------------------
+// Prune tests
+// ---------------------------------------------------------------------------
+
+// Policy that prunes a specific unit by index.
+struct PruneUnitById {
+  static bool ShouldPrune(auto &, size_t Id, auto &) {
+    return Id == 2; // prune unit 2
+  }
+};
+
+struct PruneUnitTraits
+    : plastix::DefaultNetworkTraits<plastix::UnitStateAllocator,
+                                    plastix::ConnStateAllocator> {
+  using PruneUnit = PruneUnitById;
+};
+
+TEST(PruneTest, PruneUnitMarksFlag) {
+  // 3 inputs, 1 output. Unit 2 should be marked pruned.
+  plastix::Network<PruneUnitTraits> Net(3, 1);
+  Net.DoPruneUnits();
+
+  auto &UA = Net.GetUnitAlloc();
+  EXPECT_FALSE(UA.Get<plastix::PrunedTag>(0));
+  EXPECT_FALSE(UA.Get<plastix::PrunedTag>(1));
+  EXPECT_TRUE(UA.Get<plastix::PrunedTag>(2));
+  EXPECT_FALSE(UA.Get<plastix::PrunedTag>(3));
+}
+
+TEST(PruneTest, PruneUnitRemovesConnections) {
+  // 3 inputs -> 1 output (unit 3). All 3 inputs are sources on one page.
+  // Prune unit 2 => unit 2 is a source. Since not all sources are pruned
+  // (units 0,1 survive), page stays (no compaction).
+  plastix::Network<PruneUnitTraits> Net(3, 1);
+  Net.DoPruneUnits();
+  Net.DoPruneConnections();
+
+  auto &CA = Net.GetConnAlloc();
+  auto &Page = CA.Get<plastix::ConnPageMarker>(0);
+  // Page survives because units 0 and 1 are still alive sources.
+  EXPECT_EQ(Page.Count, 3u);
+}
+
+// Policy that prunes the output unit (last unit).
+struct PruneDestUnit {
+  static size_t TargetId;
+  static bool ShouldPrune(auto &, size_t Id, auto &) { return Id == TargetId; }
+};
+size_t PruneDestUnit::TargetId = 0;
+
+struct PruneDestTraits
+    : plastix::DefaultNetworkTraits<plastix::UnitStateAllocator,
+                                    plastix::ConnStateAllocator> {
+  using PruneUnit = PruneDestUnit;
+};
+
+TEST(PruneTest, PruneDestinationClearsPage) {
+  // 2 inputs -> 1 output (unit 2). Prune the output unit.
+  // The page targets unit 2, so it should be cleared.
+  PruneDestUnit::TargetId = 2;
+  plastix::Network<PruneDestTraits> Net(2, 1);
+  Net.DoPruneUnits();
+  Net.DoPruneConnections();
+
+  auto &CA = Net.GetConnAlloc();
+  auto &Page = CA.Get<plastix::ConnPageMarker>(0);
+  EXPECT_EQ(Page.Count, 0u);
+}
+
+// Connection-level pruning policy.
+struct PruneSmallWeight {
+  static bool ShouldPrune(auto &, size_t, size_t, auto &C, size_t PageId,
+                          size_t SlotIdx, auto &) {
+    return C.template Get<plastix::ConnPageMarker>(PageId)
+               .GetSlot(SlotIdx)
+               .second < 0.5f;
+  }
+};
+
+struct PruneConnTraits
+    : plastix::DefaultNetworkTraits<plastix::UnitStateAllocator,
+                                    plastix::ConnStateAllocator> {
+  using PruneConn = PruneSmallWeight;
+};
+
+TEST(PruneTest, PruneConnClearsPageWhenAllPruned) {
+  // 2 inputs -> 1 output, weights=1.0 initially.
+  // Halve weights via update, then prune connections < 0.5.
+  // After halving, weights=0.5, so ShouldPrune (< 0.5) is false => page stays.
+  plastix::Network<PruneConnTraits> Net(2, 1);
+
+  // Manually set weights below threshold.
+  auto &CA = Net.GetConnAlloc();
+  auto &Page = CA.Get<plastix::ConnPageMarker>(0);
+  Page.Conn[0].second = 0.1f;
+  Page.Conn[1].second = 0.2f;
+
+  Net.DoPruneConnections();
+  EXPECT_EQ(Page.Count, 0u);
+}
+
+TEST(PruneTest, PruneConnKeepsPageWhenSomeSurvive) {
+  plastix::Network<PruneConnTraits> Net(2, 1);
+
+  auto &CA = Net.GetConnAlloc();
+  auto &Page = CA.Get<plastix::ConnPageMarker>(0);
+  Page.Conn[0].second = 0.1f; // below threshold
+  Page.Conn[1].second = 1.0f; // above threshold
+
+  Net.DoPruneConnections();
+  // Page survives because connection 1 is alive.
+  EXPECT_EQ(Page.Count, 2u);
+}
+
+TEST(PruneTest, DoStepWithPrune) {
+  // Full pipeline: forward, then prune destination unit.
+  PruneDestUnit::TargetId = 2;
+  plastix::Network<PruneDestTraits> Net(2, 1);
+  std::array<float, 2> In = {1.0f, 2.0f};
+  Net.DoStep(In);
+
+  // After DoStep, the output unit's connections are cleared.
+  auto &CA = Net.GetConnAlloc();
+  auto &Page = CA.Get<plastix::ConnPageMarker>(0);
+  EXPECT_EQ(Page.Count, 0u);
+}
+
 } // namespace plastix_test

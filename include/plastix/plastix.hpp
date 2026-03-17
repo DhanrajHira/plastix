@@ -110,8 +110,8 @@ public:
         auto &Acc = UnitAlloc.template Get<UpdateAccTag>(Page.ToUnitIdx);
         for (size_t S = 0; S < Page.Count; ++S) {
           auto [SrcId, Weight] = Page.Conn[S];
-          Acc = UP::Combine(Acc, UP::Map(UnitAlloc, Page.ToUnitIdx, SrcId,
-                                         Globals, Weight));
+          Acc = UP::Combine(
+              Acc, UP::Map(UnitAlloc, Page.ToUnitIdx, SrcId, Globals, Weight));
         }
       }
 
@@ -150,10 +150,56 @@ public:
   void DoPruneUnits() {
     if constexpr (std::is_same_v<typename Traits::PruneUnit, NoPruneUnit>)
       return;
+    else {
+      using PP = typename Traits::PruneUnit;
+      size_t NumUnits = UnitAlloc.Size();
+      for (size_t I = 0; I < NumUnits; ++I)
+        UnitAlloc.template Get<PrunedTag>(I) =
+            PP::ShouldPrune(UnitAlloc, I, Globals);
+    }
   }
+
   void DoPruneConnections() {
-    if constexpr (std::is_same_v<typename Traits::PruneConn, NoPruneConn>)
+    if constexpr (std::is_same_v<typename Traits::PruneUnit, NoPruneUnit> &&
+                  std::is_same_v<typename Traits::PruneConn, NoPruneConn>)
       return;
+    else {
+      using CP = typename Traits::PruneConn;
+      constexpr bool HasUnitPrune =
+          !std::is_same_v<typename Traits::PruneUnit, NoPruneUnit>;
+      constexpr bool HasConnPrune =
+          !std::is_same_v<typename Traits::PruneConn, NoPruneConn>;
+
+      for (size_t P = 0; P < ConnAlloc.Size(); ++P) {
+        auto &Page = ConnAlloc.template Get<ConnPageMarker>(P);
+        if (Page.Count == 0)
+          continue;
+
+        if constexpr (HasUnitPrune) {
+          if (UnitAlloc.template Get<PrunedTag>(Page.ToUnitIdx)) {
+            Page.Count = 0;
+            continue;
+          }
+        }
+
+        bool AnyAlive = false;
+        for (size_t S = 0; S < Page.Count; ++S) {
+          bool Remove = false;
+          if constexpr (HasUnitPrune)
+            Remove = UnitAlloc.template Get<PrunedTag>(Page.Conn[S].first);
+          if constexpr (HasConnPrune)
+            Remove = Remove || CP::ShouldPrune(UnitAlloc, Page.ToUnitIdx,
+                                               Page.Conn[S].first, ConnAlloc, P,
+                                               S, Globals);
+          if (!Remove) {
+            AnyAlive = true;
+            break;
+          }
+        }
+        if (!AnyAlive)
+          Page.Count = 0;
+      }
+    }
   }
   void DoAddUnits() {}
   void DoAddConnections() {}
