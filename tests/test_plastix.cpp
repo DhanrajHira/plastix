@@ -222,11 +222,10 @@ TEST(PassTest, BackwardPassBasic) {
   EXPECT_EQ(Net.GetStep(), 1u);
 
   auto &UA = Net.GetUnitAlloc();
-  // BackwardAcc[0] = 1.0 * 8.0 = 8.0
-  // BackwardAcc[1] = 1.0 * 8.0 = 8.0
-  // BackwardAcc[2] = 0.0 (output has no incoming backward connections)
-  EXPECT_FLOAT_EQ(UA.Get<plastix::BackwardAccTag>(0), 8.0f);
-  EXPECT_FLOAT_EQ(UA.Get<plastix::BackwardAccTag>(1), 8.0f);
+  // BackwardAcc is reset to 0 after CalculateAndApply (same pattern as
+  // UpdateAcc), so the accumulated values are consumed and then cleared.
+  EXPECT_FLOAT_EQ(UA.Get<plastix::BackwardAccTag>(0), 0.0f);
+  EXPECT_FLOAT_EQ(UA.Get<plastix::BackwardAccTag>(1), 0.0f);
   EXPECT_FLOAT_EQ(UA.Get<plastix::BackwardAccTag>(2), 0.0f);
 
   // Activations are untouched by backward pass.
@@ -539,18 +538,19 @@ TEST(PruneTest, PruneUnitMarksFlag) {
   EXPECT_FALSE(UA.Get<plastix::PrunedTag>(3));
 }
 
-TEST(PruneTest, PruneUnitRemovesConnections) {
-  // 3 inputs -> 1 output (unit 3). All 3 inputs are sources on one page.
-  // Prune unit 2 => unit 2 is a source. Since not all sources are pruned
-  // (units 0,1 survive), page stays (no compaction).
+TEST(PruneTest, PruneUnitCompactsSourceConnections) {
+  // 3 inputs -> 1 output (unit 3). Sources are units 0,1,2.
+  // Prune unit 2 => its connection is removed, page compacted to 2.
+  // Surviving connections (from units 0,1) should be at slots 0,1.
   plastix::Network<PruneUnitTraits> Net(3, 1);
   Net.DoPruneUnits();
   Net.DoPruneConnections();
 
   auto &CA = Net.GetConnAlloc();
   auto &Page = CA.Get<plastix::ConnPageMarker>(0);
-  // Page survives because units 0 and 1 are still alive sources.
-  EXPECT_EQ(Page.Count, 3u);
+  EXPECT_EQ(Page.Count, 2u);
+  EXPECT_EQ(Page.Conn[0].first, 0u);
+  EXPECT_EQ(Page.Conn[1].first, 1u);
 }
 
 // Policy that prunes the output unit (last unit).
@@ -611,17 +611,22 @@ TEST(PruneTest, PruneConnClearsPageWhenAllPruned) {
   EXPECT_EQ(Page.Count, 0u);
 }
 
-TEST(PruneTest, PruneConnKeepsPageWhenSomeSurvive) {
+TEST(PruneTest, PruneConnCompactsPartialPage) {
+  // 2 inputs -> 1 output. Conn[0] weight below threshold, Conn[1] survives.
+  // After compaction: Count=1, slot 0 holds the surviving connection.
   plastix::Network<PruneConnTraits> Net(2, 1);
 
   auto &CA = Net.GetConnAlloc();
   auto &Page = CA.Get<plastix::ConnPageMarker>(0);
-  Page.Conn[0].second = 0.1f; // below threshold
-  Page.Conn[1].second = 1.0f; // above threshold
+  Page.Conn[0].second = 0.1f; // below threshold — pruned
+  Page.Conn[1].second = 1.0f; // above threshold — survives
 
   Net.DoPruneConnections();
-  // Page survives because connection 1 is alive.
-  EXPECT_EQ(Page.Count, 2u);
+  EXPECT_EQ(Page.Count, 1u);
+  // Surviving connection (was slot 1, src=unit 1, weight=1.0) compacted to slot
+  // 0.
+  EXPECT_EQ(Page.Conn[0].first, 1u);
+  EXPECT_FLOAT_EQ(Page.Conn[0].second, 1.0f);
 }
 
 TEST(PruneTest, DoStepWithPrune) {

@@ -4,8 +4,10 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <bit>
 #include <concepts>
 #include <cstddef>
+#include <cstdint>
 #include <new>
 #include <sys/mman.h>
 #include <tuple>
@@ -113,8 +115,28 @@ template <typename T, size_t SlotSize> struct Page {
 template <typename Entity, typename... Fields>
   requires(PageType<typename Fields::Type> && ...)
 class PageAllocator : public SOAAllocator<Entity, Fields...> {
+  using Base = SOAAllocator<Entity, Fields...>;
+
+  template <typename Field>
+  void ScatterField(AllocId<Entity> PageId, uint32_t LiveMask) {
+    auto &Page = Base::template Get<typename Field::Tag>(PageId);
+    uint32_t Remaining = LiveMask;
+    size_t Dst = 0;
+    while (Remaining) {
+      size_t Src = std::countr_zero(Remaining);
+      if (Dst != Src)
+        Page.WriteSlot(Dst) = Page.GetSlot(Src);
+      Remaining &= Remaining - 1; // clear lowest set bit
+      ++Dst;
+    }
+  }
+
 public:
-  using SOAAllocator<Entity, Fields...>::SOAAllocator;
+  using Base::Base;
+
+  void CompactPage(AllocId<Entity> PageId, uint32_t LiveMask) {
+    (ScatterField<Fields>(PageId, LiveMask), ...);
+  }
 };
 
 } // namespace alloc

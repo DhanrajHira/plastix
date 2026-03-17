@@ -5,7 +5,9 @@
 #include "plastix/layers.hpp"
 #include "plastix/traits.hpp"
 #include "plastix/unit_state.hpp"
+#include <bit>
 #include <cstddef>
+#include <cstdint>
 #include <span>
 #include <type_traits>
 
@@ -181,7 +183,7 @@ public:
           }
         }
 
-        bool AnyAlive = false;
+        uint32_t Alive = 0;
         for (size_t S = 0; S < Page.Count; ++S) {
           bool Remove = false;
           if constexpr (HasUnitPrune)
@@ -190,13 +192,11 @@ public:
             Remove = Remove || CP::ShouldPrune(UnitAlloc, Page.ToUnitIdx,
                                                Page.Conn[S].first, ConnAlloc, P,
                                                S, Globals);
-          if (!Remove) {
-            AnyAlive = true;
-            break;
-          }
+          if (!Remove)
+            Alive |= (1u << S);
         }
-        if (!AnyAlive)
-          Page.Count = 0;
+        Page.Count = std::popcount(Alive);
+        ConnAlloc.CompactPage(P, Alive);
       }
     }
   }
