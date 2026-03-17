@@ -449,12 +449,13 @@ TEST(UpdateTest, UpdateUnitStateMultiplePages) {
 // ---------------------------------------------------------------------------
 
 struct WeightDecayUpdateConn {
-  static void UpdateIncomingConnection(auto &, size_t, size_t, auto &,
-                                       float &W) {
-    W *= 0.5f;
+  static void UpdateIncomingConnection(auto &, size_t, size_t, auto &C,
+                                       size_t PageId, size_t SlotIdx, auto &) {
+    C.template Get<plastix::ConnPageMarker>(PageId).WriteSlot(SlotIdx).second *=
+        0.5f;
   }
-  static void UpdateOutgoingConnection(auto &, size_t, size_t, auto &,
-                                       float &) {}
+  static void UpdateOutgoingConnection(auto &, size_t, size_t, auto &, size_t,
+                                       size_t, auto &) {}
 };
 
 struct UpdateConnTraits

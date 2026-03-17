@@ -22,16 +22,23 @@ concept UpdateUnitPolicy =
     requires(UnitAlloc &U, size_t DstId, size_t SrcId, Global &G, float W,
              typename P::Partial A, typename P::Partial B) {
       typename P::Partial;
-      { P::Map(U, DstId, SrcId, G, W) } -> std::convertible_to<typename P::Partial>;
+      {
+        P::Map(U, DstId, SrcId, G, W)
+      } -> std::convertible_to<typename P::Partial>;
       { P::Combine(A, B) } -> std::convertible_to<typename P::Partial>;
       { P::Apply(U, DstId, G, A) } -> std::same_as<void>;
     };
 
-template <typename P, typename UnitAlloc, typename Global>
+template <typename P, typename UnitAlloc, typename ConnAlloc, typename Global>
 concept UpdateConnPolicy =
-    requires(UnitAlloc &U, size_t SelfId, size_t OtherId, Global &G, float &W) {
-      { P::UpdateIncomingConnection(U, SelfId, OtherId, G, W) } -> std::same_as<void>;
-      { P::UpdateOutgoingConnection(U, SelfId, OtherId, G, W) } -> std::same_as<void>;
+    requires(UnitAlloc &U, size_t DstId, size_t SrcId, ConnAlloc &C,
+             size_t PageId, size_t SlotIdx, Global &G) {
+      {
+        P::UpdateIncomingConnection(U, DstId, SrcId, C, PageId, SlotIdx, G)
+      } -> std::same_as<void>;
+      {
+        P::UpdateOutgoingConnection(U, SrcId, DstId, C, PageId, SlotIdx, G)
+      } -> std::same_as<void>;
     };
 
 template <typename P, typename UnitAlloc, typename Global>
@@ -41,12 +48,10 @@ concept PruneUnitPolicy = requires(UnitAlloc &U, size_t Id, Global &G) {
 
 template <typename P, typename UnitAlloc, typename ConnAlloc, typename Global>
 concept PruneConnPolicy =
-    requires(UnitAlloc &U, size_t UId, ConnAlloc &C, size_t CId, Global &G) {
+    requires(UnitAlloc &U, size_t DstId, size_t SrcId, ConnAlloc &C,
+             size_t PageId, size_t SlotIdx, Global &G) {
       {
-        P::ShouldPruneIncoming(U, UId, C, CId, G)
-      } -> std::convertible_to<bool>;
-      {
-        P::ShouldPruneOutgoing(U, UId, C, CId, G)
+        P::ShouldPrune(U, DstId, SrcId, C, PageId, SlotIdx, G)
       } -> std::convertible_to<bool>;
     };
 
@@ -79,8 +84,10 @@ struct NoUpdateUnit {
 };
 
 struct NoUpdateConn {
-  static void UpdateIncomingConnection(auto &, size_t, size_t, auto &, float &) {}
-  static void UpdateOutgoingConnection(auto &, size_t, size_t, auto &, float &) {}
+  static void UpdateIncomingConnection(auto &, size_t, size_t, auto &, size_t,
+                                       size_t, auto &) {}
+  static void UpdateOutgoingConnection(auto &, size_t, size_t, auto &, size_t,
+                                       size_t, auto &) {}
 };
 
 struct NoPruneUnit {
@@ -88,10 +95,8 @@ struct NoPruneUnit {
 };
 
 struct NoPruneConn {
-  static bool ShouldPruneIncoming(auto &, size_t, auto &, size_t, auto &) {
-    return false;
-  }
-  static bool ShouldPruneOutgoing(auto &, size_t, auto &, size_t, auto &) {
+  static bool ShouldPrune(auto &, size_t, size_t, auto &, size_t, size_t,
+                          auto &) {
     return false;
   }
 };
@@ -140,7 +145,7 @@ concept NetworkTraits =
     UpdateUnitPolicy<typename T::UpdateUnit, typename T::UnitAllocator,
                      typename T::GlobalState> &&
     UpdateConnPolicy<typename T::UpdateConn, typename T::UnitAllocator,
-                     typename T::GlobalState> &&
+                     typename T::ConnAllocator, typename T::GlobalState> &&
     PruneUnitPolicy<typename T::PruneUnit, typename T::UnitAllocator,
                     typename T::GlobalState> &&
     PruneConnPolicy<typename T::PruneConn, typename T::UnitAllocator,

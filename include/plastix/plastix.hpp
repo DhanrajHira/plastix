@@ -134,16 +134,16 @@ public:
         auto &Page = ConnAlloc.template Get<ConnPageMarker>(P);
         for (size_t S = 0; S < Page.Count; ++S)
           UP::UpdateIncomingConnection(UnitAlloc, Page.ToUnitIdx,
-                                       Page.Conn[S].first, Globals,
-                                       Page.Conn[S].second);
+                                       Page.Conn[S].first, ConnAlloc, P, S,
+                                       Globals);
       }
 
       for (size_t P = 0; P < ConnAlloc.Size(); ++P) {
         auto &Page = ConnAlloc.template Get<ConnPageMarker>(P);
         for (size_t S = 0; S < Page.Count; ++S)
           UP::UpdateOutgoingConnection(UnitAlloc, Page.Conn[S].first,
-                                       Page.ToUnitIdx, Globals,
-                                       Page.Conn[S].second);
+                                       Page.ToUnitIdx, ConnAlloc, P, S,
+                                       Globals);
       }
     }
   }
