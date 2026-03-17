@@ -2,7 +2,9 @@
 #define PLASTIX_ALLOC_HPP
 
 #include <algorithm>
+#include <array>
 #include <atomic>
+#include <concepts>
 #include <cstddef>
 #include <new>
 #include <sys/mman.h>
@@ -92,12 +94,28 @@ public:
   size_t Size() const { return Count.load(); }
 };
 
-namespace detail {
-template <typename Page> struct PageTag {};
-} // namespace detail
+// ---------------------------------------------------------------------------
+// Page-structured allocation
+// ---------------------------------------------------------------------------
 
-template <typename Page>
-using PageAllocator = SOAAllocator<Page, SOAField<detail::PageTag<Page>, Page>>;
+template <typename T>
+concept PageType = requires(T &P, const T &CP, size_t I) {
+  P.WriteSlot(I);
+  CP.GetSlot(I);
+};
+
+template <typename T, size_t SlotSize> struct Page {
+  std::array<T, SlotSize> Slots;
+  const T &GetSlot(size_t I) const { return Slots[I]; }
+  T &WriteSlot(size_t I) { return Slots[I]; }
+};
+
+template <typename Entity, typename... Fields>
+  requires(PageType<typename Fields::Type> && ...)
+class PageAllocator : public SOAAllocator<Entity, Fields...> {
+public:
+  using SOAAllocator<Entity, Fields...>::SOAAllocator;
+};
 
 } // namespace alloc
 
