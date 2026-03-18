@@ -13,7 +13,7 @@ namespace plastix {
 template <typename P, typename UnitAlloc, typename Global>
 concept PassPolicy =
     requires(UnitAlloc &U, size_t Id, Global &G, float W, float A, float Acc) {
-      { P::Accumulate(U, Id, G, W, A) } -> std::convertible_to<float>;
+      { P::Map(U, Id, G, W, A) } -> std::convertible_to<float>;
       { P::CalculateAndApply(U, Id, G, Acc) } -> std::convertible_to<float>;
     };
 
@@ -60,8 +60,7 @@ concept PruneConnPolicy =
 // ---------------------------------------------------------------------------
 
 struct DefaultForwardPass {
-  static float Accumulate(auto &, size_t, auto &, float Weight,
-                          float Activation) {
+  static float Map(auto &, size_t, auto &, float Weight, float Activation) {
     return Weight * Activation;
   }
   static float CalculateAndApply(auto &, size_t, auto &, float Accumulated) {
@@ -72,7 +71,7 @@ struct DefaultForwardPass {
 // Sentinel noop policies — satisfy their concepts but DoX() methods compile
 // out the entire loop body via if constexpr when these are detected.
 struct NoBackwardPass {
-  static float Accumulate(auto &, size_t, auto &, float, float) { return 0.0f; }
+  static float Map(auto &, size_t, auto &, float, float) { return 0.0f; }
   static float CalculateAndApply(auto &, size_t, auto &, float) { return 0.0f; }
 };
 

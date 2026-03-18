@@ -75,8 +75,7 @@ TEST(NetworkTest, SingleLayerPerceptronMultiplePages) {
 }
 
 struct ScaledForwardPass {
-  static float Accumulate(auto &, size_t, auto &, float Weight,
-                          float Activation) {
+  static float Map(auto &, size_t, auto &, float Weight, float Activation) {
     return 2.0f * Weight * Activation;
   }
   static float CalculateAndApply(auto &, size_t, auto &, float Accumulated) {
@@ -148,7 +147,7 @@ TEST(PassTest, ForwardPassIdentity) {
 }
 
 TEST(PassTest, ForwardPassCustomPolicy) {
-  // ScaledForwardPass: Accumulate = 2 * W * A, Apply = tanh(Acc)
+  // ScaledForwardPass: Map = 2 * W * A, Apply = tanh(Acc)
   // 2 inputs with weights=1.0, inputs={1.0, 2.0}
   // Acc = 2*1*1 + 2*1*2 = 6.0, output = tanh(6.0)
   plastix::Network<CustomForwardTraits> Net(2, 1);
@@ -195,8 +194,7 @@ TEST(PassTest, ConsecutiveForwardPasses) {
 }
 
 struct GradientBackwardPass {
-  static float Accumulate(auto &, size_t, auto &, float Weight,
-                          float Activation) {
+  static float Map(auto &, size_t, auto &, float Weight, float Activation) {
     return Weight * Activation;
   }
   static float CalculateAndApply(auto &, size_t, auto &, float) { return 0.0f; }

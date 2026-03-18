@@ -49,6 +49,10 @@ public:
     for (size_t I = 0; I < NumInput; ++I)
       PreviousActivation(I) = Inputs[I];
 
+    size_t NumUnits = UnitAlloc.Size();
+    for (size_t I = NumInput; I < NumUnits; ++I)
+      CurrentActivation(I) = 0.0f;
+
     size_t CurDst = static_cast<size_t>(-1);
     float Acc = 0.0f;
 
@@ -56,20 +60,22 @@ public:
       auto &Page = ConnAlloc.template Get<ConnPageMarker>(P);
       if (Page.ToUnitIdx != CurDst) {
         if (CurDst != static_cast<size_t>(-1))
-          CurrentActivation(CurDst) =
-              FP::CalculateAndApply(UnitAlloc, CurDst, Globals, Acc);
+          CurrentActivation(CurDst) += Acc;
         CurDst = Page.ToUnitIdx;
         Acc = 0.0f;
       }
       for (size_t S = 0; S < Page.Count; ++S) {
         auto [SrcId, Weight] = Page.Conn[S];
-        Acc += FP::Accumulate(UnitAlloc, CurDst, Globals, Weight,
-                              PreviousActivation(SrcId));
+        Acc += FP::Map(UnitAlloc, CurDst, Globals, Weight,
+                       PreviousActivation(SrcId));
       }
     }
     if (CurDst != static_cast<size_t>(-1))
-      CurrentActivation(CurDst) =
-          FP::CalculateAndApply(UnitAlloc, CurDst, Globals, Acc);
+      CurrentActivation(CurDst) += Acc;
+
+    for (size_t I = NumInput; I < NumUnits; ++I)
+      CurrentActivation(I) =
+          FP::CalculateAndApply(UnitAlloc, I, Globals, CurrentActivation(I));
 
     ++Step;
   }
@@ -86,7 +92,7 @@ public:
         for (size_t S = 0; S < Page.Count; ++S) {
           auto [SrcId, Weight] = Page.Conn[S];
           UnitAlloc.template Get<BackwardAccTag>(SrcId) +=
-              BP::Accumulate(UnitAlloc, SrcId, Globals, Weight, DstAct);
+              BP::Map(UnitAlloc, SrcId, Globals, Weight, DstAct);
         }
       }
 
