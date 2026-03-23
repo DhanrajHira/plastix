@@ -263,6 +263,7 @@ public:
   }
   void DoAddUnits() {}
   void DoAddConnections() {}
+  std::span<const size_t> GetSOI() const {return std::span<size_t>();}
 
   // Runs the full per-step pipeline in order:
   // ForwardPass → BackwardPass → UpdateUnit → UpdateConn → PruneUnits →
