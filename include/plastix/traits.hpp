@@ -55,6 +55,21 @@ concept UpdateUnitPolicy =
       { P::Apply(U, DstId, G, A) } -> std::same_as<void>;
     };
 
+// AddUnitPolicy determines if a unit should be added within some spheroid
+// and then adds it if so.
+template <typename P, typename UnitAlloc, typename Global>
+concept AddUnitPolicy =
+    requires(UnitAlloc &U, float SOI,
+             size_t PageId, size_t SlotIdx, Global &G) {
+      {
+        P::ShouldAddUnit(U, SOI, PageId, SlotIdx, G)
+      } -> std::convertible_to<bool>;
+      {
+        P::AddUnit(U, SOI , PageId, SlotIdx, G)
+      } -> std::same_as<void>;
+    };
+
+
 // UpdateConnPolicy runs two separate sweeps over every connection page so
 // that each endpoint can be updated with full knowledge of its own state:
 //
@@ -74,6 +89,20 @@ concept UpdateConnPolicy =
       } -> std::same_as<void>;
       {
         P::UpdateOutgoingConnection(U, SrcId, DstId, C, PageId, SlotIdx, G)
+      } -> std::same_as<void>;
+    };
+
+// AddConnPolicy determines if a connection should be added between two units
+// and then adds it if so.
+template <typename P, typename UnitAlloc, typename ConnAlloc, typename Global>
+concept AddConnPolicy =
+    requires(UnitAlloc &U, size_t DstId, size_t SrcId, ConnAlloc &C,
+             size_t PageId, size_t SlotIdx, Global &G) {
+      {
+        P::ShouldAddConnection(U, DstId, SrcId, C, PageId, SlotIdx, G)
+      } -> std::convertible_to<bool>;
+      {
+        P::AddConnection(U, DstId, SrcId, C, PageId, SlotIdx, G)
       } -> std::same_as<void>;
     };
 
@@ -127,11 +156,27 @@ struct NoUpdateUnit {
   static void Apply(auto &, size_t, auto &, Partial) {}
 };
 
+struct NoAddUnit {
+  static bool ShouldAddUnit(auto &, float, size_t, size_t, auto &) {
+    return false;
+  }
+  static void AddUnit(auto &, float, size_t, size_t, auto &) {}
+};
+
 struct NoUpdateConn {
   static void UpdateIncomingConnection(auto &, size_t, size_t, auto &, size_t,
                                        size_t, auto &) {}
   static void UpdateOutgoingConnection(auto &, size_t, size_t, auto &, size_t,
                                        size_t, auto &) {}
+};
+
+struct NoAddConn {
+  static bool ShouldAddConnection(auto &, size_t, size_t, auto &, size_t,
+                                  size_t, auto &) {
+    return false;
+  }
+  static void AddConnection(auto &, size_t, size_t, auto &, size_t, size_t,
+                             auto &) {}
 };
 
 struct NoPruneUnit {
@@ -176,7 +221,9 @@ struct DefaultNetworkTraits {
   using ForwardPass = DefaultForwardPass;
   using BackwardPass = NoBackwardPass;
   using UpdateUnit = NoUpdateUnit;
+  using AddUnit = NoAddUnit;
   using UpdateConn = NoUpdateConn;
+  using AddConn = NoAddConn;
   using PruneUnit = NoPruneUnit;
   using PruneConn = NoPruneConn;
 };
@@ -196,7 +243,9 @@ concept NetworkTraits =
       typename T::ForwardPass;
       typename T::BackwardPass;
       typename T::UpdateUnit;
+      typename T::AddUnit;
       typename T::UpdateConn;
+      typename T::AddConn;
       typename T::PruneUnit;
       typename T::PruneConn;
     } &&
@@ -206,8 +255,12 @@ concept NetworkTraits =
                typename T::GlobalState> &&
     UpdateUnitPolicy<typename T::UpdateUnit, typename T::UnitAllocator,
                      typename T::GlobalState> &&
+    AddUnitPolicy<typename T::AddUnit, typename T::UnitAllocator,
+                  typename T::GlobalState> &&
     UpdateConnPolicy<typename T::UpdateConn, typename T::UnitAllocator,
                      typename T::ConnAllocator, typename T::GlobalState> &&
+    AddConnPolicy<typename T::AddConn, typename T::UnitAllocator,
+                  typename T::ConnAllocator, typename T::GlobalState> &&
     PruneUnitPolicy<typename T::PruneUnit, typename T::UnitAllocator,
                     typename T::GlobalState> &&
     PruneConnPolicy<typename T::PruneConn, typename T::UnitAllocator,

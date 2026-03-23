@@ -271,6 +271,8 @@ public:
   void DoStep(std::span<const float> Inputs) {
     DoForwardPass(Inputs);
     DoBackwardPass();
+    DoAddUnits();
+    DoAddConnections();
     DoUpdateUnitState();
     DoUpdateConnectionState();
     DoPruneUnits();
