@@ -46,6 +46,12 @@ if(PLASTIX_BUILD_TESTS)
     add_subdirectory(tests)
 endif()
 
+option(PLASTIX_BUILD_EXAMPLES "Build examples" ON)
+
+if(PLASTIX_BUILD_EXAMPLES)
+    add_subdirectory(examples)
+endif()
+
 if(PLASTIX_BUILD_BENCHMARKS)
     set(BENCHMARK_ENABLE_TESTING OFF CACHE BOOL "" FORCE)
     FetchContent_Declare(

@@ -1,0 +1,5 @@
+SOA_TYPE(TestSOA)
+FIELD(PosX, float)
+FIELD(PosY, float)
+FIELD(Mass, double)
+SOA_END()
