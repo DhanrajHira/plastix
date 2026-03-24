@@ -296,6 +296,10 @@ public:
   auto &GetConnAlloc() { return ConnAlloc; }
   auto &GetUnitAlloc() { return UnitAlloc; }
 
+  /// This _needs_ to be locked if you are writing to it. Ideally you should not
+  /// be writing to it at all.
+  auto &GetGlobalState() { return Globals; }
+
 private:
   // Ping-pong activation buffers. ActivationA and ActivationB alternate roles
   // each step: one holds the values being read (PreviousActivation, i.e. the
