@@ -12,17 +12,14 @@ using TestTraits = plastix::DefaultNetworkTraits<plastix::UnitStateAllocator,
                                                  plastix::ConnStateAllocator>;
 using TestNetwork = plastix::Network<TestTraits>;
 
-TEST(NetworkTest, ConnPageDefaultInitialization) {
+TEST(NetworkTest, ConnDefaultInitialization) {
   plastix::ConnStateAllocator Alloc(4);
   auto Id = Alloc.Allocate();
-  auto &Page = Alloc.Get<plastix::ConnPageMarker>(Id);
 
-  EXPECT_EQ(Page.Count, 0u);
-  EXPECT_EQ(Page.ToUnitIdx, 0u);
-  for (size_t I = 0; I < plastix::ConnPageSlotSize; ++I) {
-    EXPECT_EQ(Page.Conn[I].first, 0u);
-    EXPECT_FLOAT_EQ(Page.Conn[I].second, 0.0f);
-  }
+  EXPECT_EQ(Alloc.Get<plastix::FromIdTag>(Id), 0u);
+  EXPECT_EQ(Alloc.Get<plastix::ToIdTag>(Id), 0u);
+  EXPECT_FLOAT_EQ(Alloc.Get<plastix::WeightTag>(Id), 0.0f);
+  EXPECT_FALSE(Alloc.Get<plastix::DeadTag>(Id));
 }
 
 TEST(NetworkTest, SingleLayerPerceptronConnections) {
@@ -34,43 +31,36 @@ TEST(NetworkTest, SingleLayerPerceptronConnections) {
   auto &UnitAlloc = Net.GetUnitAlloc();
 
   EXPECT_EQ(UnitAlloc.Size(), InputDim + OutputDim);
-  EXPECT_EQ(ConnAlloc.Size(), OutputDim);
+  // 2 outputs * 3 inputs = 6 individual connections
+  EXPECT_EQ(ConnAlloc.Size(), InputDim * OutputDim);
 
+  // FullyConnected allocates: for each output unit, for each source.
+  // Output unit 0 (id=3): connections 0,1,2 from inputs 0,1,2
+  // Output unit 1 (id=4): connections 3,4,5 from inputs 0,1,2
   for (size_t Out = 0; Out < OutputDim; ++Out) {
-    auto &Page = ConnAlloc.Get<plastix::ConnPageMarker>(Out);
-    EXPECT_EQ(Page.ToUnitIdx, InputDim + Out);
-    EXPECT_EQ(Page.Count, InputDim);
-
     for (size_t In = 0; In < InputDim; ++In) {
-      EXPECT_EQ(Page.Conn[In].first, In);
-      EXPECT_FLOAT_EQ(Page.Conn[In].second, 1.0f);
+      size_t C = Out * InputDim + In;
+      EXPECT_EQ(ConnAlloc.Get<plastix::ToIdTag>(C), InputDim + Out);
+      EXPECT_EQ(ConnAlloc.Get<plastix::FromIdTag>(C), In);
+      EXPECT_FLOAT_EQ(ConnAlloc.Get<plastix::WeightTag>(C), 1.0f);
     }
   }
 }
 
-TEST(NetworkTest, SingleLayerPerceptronMultiplePages) {
+TEST(NetworkTest, SingleLayerPerceptronManyConnections) {
   constexpr size_t InputDim = 10;
   constexpr size_t OutputDim = 1;
   TestNetwork Net(InputDim, OutputDim);
 
   auto &ConnAlloc = Net.GetConnAlloc();
 
-  EXPECT_EQ(ConnAlloc.Size(), 2u);
+  // 10 individual connections (was 2 pages)
+  EXPECT_EQ(ConnAlloc.Size(), 10u);
 
-  auto &Page0 = ConnAlloc.Get<plastix::ConnPageMarker>(0);
-  EXPECT_EQ(Page0.ToUnitIdx, InputDim);
-  EXPECT_EQ(Page0.Count, plastix::ConnPageSlotSize);
-  for (size_t I = 0; I < plastix::ConnPageSlotSize; ++I) {
-    EXPECT_EQ(Page0.Conn[I].first, I);
-    EXPECT_FLOAT_EQ(Page0.Conn[I].second, 1.0f);
-  }
-
-  auto &Page1 = ConnAlloc.Get<plastix::ConnPageMarker>(1);
-  EXPECT_EQ(Page1.ToUnitIdx, InputDim);
-  EXPECT_EQ(Page1.Count, InputDim - plastix::ConnPageSlotSize);
-  for (size_t I = 0; I < InputDim - plastix::ConnPageSlotSize; ++I) {
-    EXPECT_EQ(Page1.Conn[I].first, plastix::ConnPageSlotSize + I);
-    EXPECT_FLOAT_EQ(Page1.Conn[I].second, 1.0f);
+  for (size_t I = 0; I < 10; ++I) {
+    EXPECT_EQ(ConnAlloc.Get<plastix::FromIdTag>(I), I);
+    EXPECT_EQ(ConnAlloc.Get<plastix::ToIdTag>(I), InputDim);
+    EXPECT_FLOAT_EQ(ConnAlloc.Get<plastix::WeightTag>(I), 1.0f);
   }
 }
 
@@ -159,8 +149,8 @@ TEST(PassTest, ForwardPassCustomPolicy) {
   EXPECT_FLOAT_EQ(Out, std::tanh(6.0f));
 }
 
-TEST(PassTest, ForwardPassMultiplePages) {
-  // 10 inputs (each=1.0), 1 output — spans 2 conn pages
+TEST(PassTest, ForwardPassManyConnections) {
+  // 10 inputs (each=1.0), 1 output — 10 individual connections
   // Output = sum of 10 * 1.0 = 10.0
   TestNetwork Net(10, 1);
   std::array<float, 10> In;
@@ -241,62 +231,58 @@ using FC = plastix::FullyConnected;
 
 TEST(LayerBuilderTest, MultiLayerBuilder) {
   // 3 inputs -> 5 hidden -> 1 output = 9 units
-  // Layer 1: 5 units, each connected to 3 inputs = 5 pages (3 < 7 slots)
-  // Layer 2: 1 unit connected to 5 hidden = 1 page (5 < 7 slots)
-  // Total: 6 pages
+  // Layer 1: 5 units * 3 inputs = 15 connections
+  // Layer 2: 1 unit * 5 hidden = 5 connections
+  // Total: 20 connections
   TestNetwork Net(3, FC{5}, FC{1});
 
   auto &UA = Net.GetUnitAlloc();
   auto &CA = Net.GetConnAlloc();
 
   EXPECT_EQ(UA.Size(), 9u);
-  EXPECT_EQ(CA.Size(), 6u);
+  EXPECT_EQ(CA.Size(), 20u);
 
-  // Hidden layer pages (units 3-7, each with 1 page of 3 connections)
+  // Hidden layer connections (units 3-7, each with 3 connections from inputs)
   for (size_t I = 0; I < 5; ++I) {
-    auto &Page = CA.Get<plastix::ConnPageMarker>(I);
-    EXPECT_EQ(Page.ToUnitIdx, 3 + I);
-    EXPECT_EQ(Page.Count, 3u);
     for (size_t S = 0; S < 3; ++S) {
-      EXPECT_EQ(Page.Conn[S].first, S);
-      EXPECT_FLOAT_EQ(Page.Conn[S].second, 1.0f);
+      size_t C = I * 3 + S;
+      EXPECT_EQ(CA.Get<plastix::ToIdTag>(C), 3 + I);
+      EXPECT_EQ(CA.Get<plastix::FromIdTag>(C), S);
+      EXPECT_FLOAT_EQ(CA.Get<plastix::WeightTag>(C), 1.0f);
     }
   }
 
-  // Output layer page (unit 8, connected to units 3-7)
-  auto &OutPage = CA.Get<plastix::ConnPageMarker>(5);
-  EXPECT_EQ(OutPage.ToUnitIdx, 8u);
-  EXPECT_EQ(OutPage.Count, 5u);
+  // Output layer connections (unit 8, connected to units 3-7)
   for (size_t S = 0; S < 5; ++S) {
-    EXPECT_EQ(OutPage.Conn[S].first, 3 + S);
-    EXPECT_FLOAT_EQ(OutPage.Conn[S].second, 1.0f);
+    size_t C = 15 + S;
+    EXPECT_EQ(CA.Get<plastix::ToIdTag>(C), 8u);
+    EXPECT_EQ(CA.Get<plastix::FromIdTag>(C), 3 + S);
+    EXPECT_FLOAT_EQ(CA.Get<plastix::WeightTag>(C), 1.0f);
   }
 }
 
-TEST(LayerBuilderTest, MultiLayerMultiplePages) {
+TEST(LayerBuilderTest, MultiLayerManyConnections) {
   // 10 inputs -> 2 hidden -> 1 output = 13 units
-  // Layer 1: 2 units, each connected to 10 inputs = 2*2 = 4 pages
-  // Layer 2: 1 unit connected to 2 hidden = 1 page
-  // Total: 5 pages
+  // Layer 1: 2 * 10 = 20 connections
+  // Layer 2: 1 * 2 = 2 connections
+  // Total: 22 connections
   TestNetwork Net(10, FC{2}, FC{1});
 
   auto &UA = Net.GetUnitAlloc();
   auto &CA = Net.GetConnAlloc();
 
   EXPECT_EQ(UA.Size(), 13u);
-  EXPECT_EQ(CA.Size(), 5u);
+  EXPECT_EQ(CA.Size(), 22u);
 }
 
 TEST(LayerBuilderTest, CustomInitWeight) {
   TestNetwork Net(2, FC{1, 0.5f});
 
   auto &CA = Net.GetConnAlloc();
-  EXPECT_EQ(CA.Size(), 1u);
+  EXPECT_EQ(CA.Size(), 2u);
 
-  auto &Page = CA.Get<plastix::ConnPageMarker>(0);
-  EXPECT_EQ(Page.Count, 2u);
-  for (size_t S = 0; S < 2; ++S)
-    EXPECT_FLOAT_EQ(Page.Conn[S].second, 0.5f);
+  for (size_t C = 0; C < 2; ++C)
+    EXPECT_FLOAT_EQ(CA.Get<plastix::WeightTag>(C), 0.5f);
 }
 
 TEST(LayerBuilderTest, ThreeLayerBuilder) {
@@ -426,8 +412,8 @@ TEST(UpdateTest, UpdateUnitStateMapReduce) {
   EXPECT_FLOAT_EQ(UA.Get<plastix::BackwardAccTag>(2), 2.0f);
 }
 
-TEST(UpdateTest, UpdateUnitStateMultiplePages) {
-  // 10 inputs, 1 output (spans 2 conn pages), weights=1.0.
+TEST(UpdateTest, UpdateUnitStateManyConnections) {
+  // 10 inputs, 1 output (10 connections), weights=1.0.
   // Output unit accumulates 10 weights => Acc=10.
   plastix::Network<UpdateUnitTraits> Net(10, 1);
   std::array<float, 10> In;
@@ -447,12 +433,11 @@ TEST(UpdateTest, UpdateUnitStateMultiplePages) {
 
 struct WeightDecayUpdateConn {
   static void UpdateIncomingConnection(auto &, size_t, size_t, auto &C,
-                                       size_t PageId, size_t SlotIdx, auto &) {
-    C.template Get<plastix::ConnPageMarker>(PageId).WriteSlot(SlotIdx).second *=
-        0.5f;
+                                       size_t ConnId, auto &) {
+    C.template Get<plastix::WeightTag>(ConnId) *= 0.5f;
   }
   static void UpdateOutgoingConnection(auto &, size_t, size_t, auto &, size_t,
-                                       size_t, auto &) {}
+                                       auto &) {}
 };
 
 struct UpdateConnTraits
@@ -470,9 +455,8 @@ TEST(UpdateTest, UpdateConnStateWeightDecay) {
   Net.DoUpdateConnectionState();
 
   auto &CA = Net.GetConnAlloc();
-  auto &Page = CA.Get<plastix::ConnPageMarker>(0);
-  EXPECT_FLOAT_EQ(Page.Conn[0].second, 0.5f);
-  EXPECT_FLOAT_EQ(Page.Conn[1].second, 0.5f);
+  EXPECT_FLOAT_EQ(CA.Get<plastix::WeightTag>(0), 0.5f);
+  EXPECT_FLOAT_EQ(CA.Get<plastix::WeightTag>(1), 0.5f);
 }
 
 // ---------------------------------------------------------------------------
@@ -497,9 +481,8 @@ TEST(UpdateTest, DoStepWithUpdate) {
   EXPECT_FLOAT_EQ(UA.Get<plastix::BackwardAccTag>(2), 2.0f);
 
   auto &CA = Net.GetConnAlloc();
-  auto &Page = CA.Get<plastix::ConnPageMarker>(0);
-  EXPECT_FLOAT_EQ(Page.Conn[0].second, 0.5f);
-  EXPECT_FLOAT_EQ(Page.Conn[1].second, 0.5f);
+  EXPECT_FLOAT_EQ(CA.Get<plastix::WeightTag>(0), 0.5f);
+  EXPECT_FLOAT_EQ(CA.Get<plastix::WeightTag>(1), 0.5f);
 
   // Output should still be correct from forward pass: 3+4=7.
   auto Out = Net.GetOutput();
@@ -510,6 +493,15 @@ TEST(UpdateTest, DoStepWithUpdate) {
 // ---------------------------------------------------------------------------
 // Prune tests
 // ---------------------------------------------------------------------------
+
+// Helper: count alive (non-dead) connections.
+static size_t CountAlive(auto &ConnAlloc) {
+  size_t Count = 0;
+  for (size_t C = 0; C < ConnAlloc.Size(); ++C)
+    if (!ConnAlloc.template Get<plastix::DeadTag>(C))
+      ++Count;
+  return Count;
+}
 
 // Policy that prunes a specific unit by index.
 struct PruneUnitById {
@@ -536,19 +528,27 @@ TEST(PruneTest, PruneUnitMarksFlag) {
   EXPECT_FALSE(UA.Get<plastix::PrunedTag>(3));
 }
 
-TEST(PruneTest, PruneUnitCompactsSourceConnections) {
+TEST(PruneTest, PruneUnitMarksSourceConnectionsDead) {
   // 3 inputs -> 1 output (unit 3). Sources are units 0,1,2.
-  // Prune unit 2 => its connection is removed, page compacted to 2.
-  // Surviving connections (from units 0,1) should be at slots 0,1.
+  // Prune unit 2 => connection from unit 2 is marked dead.
+  // 2 connections survive.
   plastix::Network<PruneUnitTraits> Net(3, 1);
   Net.DoPruneUnits();
   Net.DoPruneConnections();
 
   auto &CA = Net.GetConnAlloc();
-  auto &Page = CA.Get<plastix::ConnPageMarker>(0);
-  EXPECT_EQ(Page.Count, 2u);
-  EXPECT_EQ(Page.Conn[0].first, 0u);
-  EXPECT_EQ(Page.Conn[1].first, 1u);
+  // Total connections unchanged (tombstone)
+  EXPECT_EQ(CA.Size(), 3u);
+  // 2 alive
+  EXPECT_EQ(CountAlive(CA), 2u);
+
+  // Verify the connection from unit 2 is dead
+  for (size_t C = 0; C < CA.Size(); ++C) {
+    if (CA.Get<plastix::FromIdTag>(C) == 2)
+      EXPECT_TRUE(CA.Get<plastix::DeadTag>(C));
+    else
+      EXPECT_FALSE(CA.Get<plastix::DeadTag>(C));
+  }
 }
 
 // Policy that prunes the output unit (last unit).
@@ -564,26 +564,24 @@ struct PruneDestTraits
   using PruneUnit = PruneDestUnit;
 };
 
-TEST(PruneTest, PruneDestinationClearsPage) {
+TEST(PruneTest, PruneDestinationMarksAllDead) {
   // 2 inputs -> 1 output (unit 2). Prune the output unit.
-  // The page targets unit 2, so it should be cleared.
+  // All connections targeting unit 2 should be marked dead.
   PruneDestUnit::TargetId = 2;
   plastix::Network<PruneDestTraits> Net(2, 1);
   Net.DoPruneUnits();
   Net.DoPruneConnections();
 
   auto &CA = Net.GetConnAlloc();
-  auto &Page = CA.Get<plastix::ConnPageMarker>(0);
-  EXPECT_EQ(Page.Count, 0u);
+  EXPECT_EQ(CA.Size(), 2u);
+  EXPECT_EQ(CountAlive(CA), 0u);
 }
 
 // Connection-level pruning policy.
 struct PruneSmallWeight {
-  static bool ShouldPrune(auto &, size_t, size_t, auto &C, size_t PageId,
-                          size_t SlotIdx, auto &) {
-    return C.template Get<plastix::ConnPageMarker>(PageId)
-               .GetSlot(SlotIdx)
-               .second < 0.5f;
+  static bool ShouldPrune(auto &, size_t, size_t, auto &C, size_t ConnId,
+                          auto &) {
+    return C.template Get<plastix::WeightTag>(ConnId) < 0.5f;
   }
 };
 
@@ -593,38 +591,36 @@ struct PruneConnTraits
   using PruneConn = PruneSmallWeight;
 };
 
-TEST(PruneTest, PruneConnClearsPageWhenAllPruned) {
+TEST(PruneTest, PruneConnMarksAllDeadWhenAllPruned) {
   // 2 inputs -> 1 output, weights=1.0 initially.
-  // Halve weights via update, then prune connections < 0.5.
-  // After halving, weights=0.5, so ShouldPrune (< 0.5) is false => page stays.
+  // Manually set weights below threshold, then prune.
   plastix::Network<PruneConnTraits> Net(2, 1);
 
-  // Manually set weights below threshold.
   auto &CA = Net.GetConnAlloc();
-  auto &Page = CA.Get<plastix::ConnPageMarker>(0);
-  Page.Conn[0].second = 0.1f;
-  Page.Conn[1].second = 0.2f;
+  CA.Get<plastix::WeightTag>(0) = 0.1f;
+  CA.Get<plastix::WeightTag>(1) = 0.2f;
 
   Net.DoPruneConnections();
-  EXPECT_EQ(Page.Count, 0u);
+  EXPECT_EQ(CA.Size(), 2u);
+  EXPECT_EQ(CountAlive(CA), 0u);
 }
 
-TEST(PruneTest, PruneConnCompactsPartialPage) {
+TEST(PruneTest, PruneConnMarksPartialDead) {
   // 2 inputs -> 1 output. Conn[0] weight below threshold, Conn[1] survives.
-  // After compaction: Count=1, slot 0 holds the surviving connection.
   plastix::Network<PruneConnTraits> Net(2, 1);
 
   auto &CA = Net.GetConnAlloc();
-  auto &Page = CA.Get<plastix::ConnPageMarker>(0);
-  Page.Conn[0].second = 0.1f; // below threshold — pruned
-  Page.Conn[1].second = 1.0f; // above threshold — survives
+  CA.Get<plastix::WeightTag>(0) = 0.1f; // below threshold — pruned
+  CA.Get<plastix::WeightTag>(1) = 1.0f; // above threshold — survives
 
   Net.DoPruneConnections();
-  EXPECT_EQ(Page.Count, 1u);
-  // Surviving connection (was slot 1, src=unit 1, weight=1.0) compacted to slot
-  // 0.
-  EXPECT_EQ(Page.Conn[0].first, 1u);
-  EXPECT_FLOAT_EQ(Page.Conn[0].second, 1.0f);
+  EXPECT_EQ(CA.Size(), 2u);
+  EXPECT_EQ(CountAlive(CA), 1u);
+
+  // Connection 0 is dead, connection 1 is alive
+  EXPECT_TRUE(CA.Get<plastix::DeadTag>(0));
+  EXPECT_FALSE(CA.Get<plastix::DeadTag>(1));
+  EXPECT_FLOAT_EQ(CA.Get<plastix::WeightTag>(1), 1.0f);
 }
 
 TEST(PruneTest, DoStepWithPrune) {
@@ -634,10 +630,9 @@ TEST(PruneTest, DoStepWithPrune) {
   std::array<float, 2> In = {1.0f, 2.0f};
   Net.DoStep(In);
 
-  // After DoStep, the output unit's connections are cleared.
+  // After DoStep, all connections to the output unit are dead.
   auto &CA = Net.GetConnAlloc();
-  auto &Page = CA.Get<plastix::ConnPageMarker>(0);
-  EXPECT_EQ(Page.Count, 0u);
+  EXPECT_EQ(CountAlive(CA), 0u);
 }
 
 } // namespace plastix_test

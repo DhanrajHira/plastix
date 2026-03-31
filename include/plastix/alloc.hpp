@@ -4,8 +4,6 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
-#include <bit>
-#include <concepts>
 #include <cstddef>
 #include <cstdint>
 #include <new>
@@ -128,61 +126,6 @@ public:
   };
 
   size_t Size() const { return Count.load(); }
-};
-
-// ---------------------------------------------------------------------------
-// Page-structured allocation
-//
-// PageAllocator extends SOAAllocator for entities whose fields are fixed-size
-// arrays of slots (PageType). It adds CompactPage() for in-place stream
-// compaction, used by DoPruneConnections() to remove dead connections.
-// ---------------------------------------------------------------------------
-
-// PageType concept: a field stored in a PageAllocator must expose indexed
-// slot access so ScatterField can move slots without knowing the concrete type.
-template <typename T>
-concept PageType = requires(T &P, const T &CP, size_t I) {
-  P.WriteSlot(I);
-  CP.GetSlot(I);
-};
-
-template <typename T, size_t SlotSize> struct Page {
-  std::array<T, SlotSize> Slots;
-  const T &GetSlot(size_t I) const { return Slots[I]; }
-  T &WriteSlot(size_t I) { return Slots[I]; }
-};
-
-template <typename Entity, typename... Fields>
-  requires(PageType<typename Fields::Type> && ...)
-class PageAllocator : public SOAAllocator<Entity, Fields...> {
-  using Base = SOAAllocator<Entity, Fields...>;
-
-  // Compacts one field's slots for a single page in-place.
-  // LiveMask is a bitmask where bit i is set if slot i should survive.
-  // Surviving slots are moved to the front in index order, overwriting gaps.
-  template <typename Field>
-  void ScatterField(AllocId<Entity> PageId, uint32_t LiveMask) {
-    auto &Page = Base::template Get<typename Field::Tag>(PageId);
-    uint32_t Remaining = LiveMask;
-    size_t Dst = 0;
-    while (Remaining) {
-      size_t Src = std::countr_zero(Remaining); // index of lowest set bit
-      if (Dst != Src)
-        Page.WriteSlot(Dst) = Page.GetSlot(Src);
-      Remaining &= Remaining - 1; // clear lowest set bit
-      ++Dst;
-    }
-  }
-
-public:
-  using Base::Base;
-
-  // Compacts all fields of one page according to LiveMask. Called by
-  // DoPruneConnections() after it has computed which slots survive.
-  // The caller is responsible for updating the page's Count field.
-  void CompactPage(AllocId<Entity> PageId, uint32_t LiveMask) {
-    (ScatterField<Fields>(PageId, LiveMask), ...);
-  }
 };
 
 } // namespace alloc
