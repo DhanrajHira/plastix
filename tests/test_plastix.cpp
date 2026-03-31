@@ -126,14 +126,13 @@ TEST(PassTest, ForwardPassIdentity) {
   Net.DoForwardPass(In);
 
   auto &UA = Net.GetUnitAlloc();
-  // Step 0 (even): inputs written to A (previous), output written to B
-  // (current).
+  // Step 0 (even): inputs and output written to B (current).
   float Out = UA.Get<plastix::ActivationBTag>(2);
   EXPECT_FLOAT_EQ(Out, 8.0f);
 
-  // Inputs are in the previous (A) buffer only.
-  EXPECT_FLOAT_EQ(UA.Get<plastix::ActivationATag>(0), 3.0f);
-  EXPECT_FLOAT_EQ(UA.Get<plastix::ActivationATag>(1), 5.0f);
+  // Inputs are in the current (B) buffer.
+  EXPECT_FLOAT_EQ(UA.Get<plastix::ActivationBTag>(0), 3.0f);
+  EXPECT_FLOAT_EQ(UA.Get<plastix::ActivationBTag>(1), 5.0f);
 }
 
 TEST(PassTest, ForwardPassCustomPolicy) {
@@ -172,13 +171,13 @@ TEST(PassTest, ConsecutiveForwardPasses) {
   auto &UA = Net.GetUnitAlloc();
   EXPECT_FLOAT_EQ(UA.Get<plastix::ActivationBTag>(2), 3.0f);
 
-  // Second pass (step 1, writes to A, reads from B)
+  // Second pass (step 1, writes to A).
   std::array<float, 2> In2 = {4.0f, 5.0f};
   Net.DoForwardPass(In2);
   EXPECT_FLOAT_EQ(UA.Get<plastix::ActivationATag>(2), 9.0f);
-  // Inputs written to previous (B) only.
-  EXPECT_FLOAT_EQ(UA.Get<plastix::ActivationBTag>(0), 4.0f);
-  EXPECT_FLOAT_EQ(UA.Get<plastix::ActivationBTag>(1), 5.0f);
+  // Inputs written to current (A).
+  EXPECT_FLOAT_EQ(UA.Get<plastix::ActivationATag>(0), 4.0f);
+  EXPECT_FLOAT_EQ(UA.Get<plastix::ActivationATag>(1), 5.0f);
   // Previous output in B untouched by this pass.
   EXPECT_FLOAT_EQ(UA.Get<plastix::ActivationBTag>(2), 3.0f);
 }
@@ -217,9 +216,9 @@ TEST(PassTest, BackwardPassBasic) {
   EXPECT_FLOAT_EQ(UA.Get<plastix::BackwardAccTag>(2), 0.0f);
 
   // Activations are untouched by backward pass.
-  // Inputs in A (previous at step 0), output in B (current at step 0).
-  EXPECT_FLOAT_EQ(UA.Get<plastix::ActivationATag>(0), 3.0f);
-  EXPECT_FLOAT_EQ(UA.Get<plastix::ActivationATag>(1), 5.0f);
+  // All values in B (current at step 0).
+  EXPECT_FLOAT_EQ(UA.Get<plastix::ActivationBTag>(0), 3.0f);
+  EXPECT_FLOAT_EQ(UA.Get<plastix::ActivationBTag>(1), 5.0f);
   EXPECT_FLOAT_EQ(UA.Get<plastix::ActivationBTag>(2), 8.0f);
 }
 
@@ -295,25 +294,18 @@ TEST(LayerBuilderTest, ThreeLayerBuilder) {
 
 TEST(LayerBuilderTest, MultiLayerForwardPass) {
   // 2 inputs -> 2 hidden -> 1 output, all weights=1
-  // Pipelined semantics: signals propagate one layer per DoForwardPass call.
+  // Level-based: all layers evaluated in a single DoForwardPass call.
   TestNetwork Net(2, FC{2}, FC{1});
 
   auto &UA = Net.GetUnitAlloc();
 
-  // Step 0 (even): inputs written to A (previous), accumulation writes to B.
-  // Hidden reads prev inputs from A = {1,1}. Hidden[2]=Hidden[3]=2.
-  // Output reads prev hidden from A (still 0) => Output[4]=0.
+  // Step 0 (even): all values written to B (current).
+  // Hidden = {1+1, 1+1} = {2, 2}. Output = 2+2 = 4.
   std::array<float, 2> In = {1.0f, 1.0f};
   Net.DoForwardPass(In);
   EXPECT_FLOAT_EQ(UA.Get<plastix::ActivationBTag>(2), 2.0f);
   EXPECT_FLOAT_EQ(UA.Get<plastix::ActivationBTag>(3), 2.0f);
-  EXPECT_FLOAT_EQ(UA.Get<plastix::ActivationBTag>(4), 0.0f);
-
-  // Step 1 (odd): inputs written to B (previous), accumulation writes to A.
-  // Hidden reads prev inputs from B = {1,1} => 2. Output reads prev hidden
-  // from B = {2,2} => 4. Signal has now propagated through both layers.
-  Net.DoForwardPass(In);
-  EXPECT_FLOAT_EQ(UA.Get<plastix::ActivationATag>(4), 4.0f);
+  EXPECT_FLOAT_EQ(UA.Get<plastix::ActivationBTag>(4), 4.0f);
 }
 
 // ---------------------------------------------------------------------------
@@ -345,19 +337,14 @@ TEST(OutputTest, MultipleOutputUnits) {
 
 TEST(OutputTest, MultiLayerGetOutput) {
   // 2 inputs -> 2 hidden -> 1 output, weights=1.
-  // Pipelined: output is 0 after first step, 4 after second.
+  // Level-based: output is 4 after first step.
   TestNetwork Net(2, FC{2}, FC{1});
   std::array<float, 2> In = {1.0f, 1.0f};
 
   Net.DoForwardPass(In);
   auto Out1 = Net.GetOutput();
   ASSERT_EQ(Out1.size(), 1u);
-  EXPECT_FLOAT_EQ(Out1[0], 0.0f);
-
-  Net.DoForwardPass(In);
-  auto Out2 = Net.GetOutput();
-  ASSERT_EQ(Out2.size(), 1u);
-  EXPECT_FLOAT_EQ(Out2[0], 4.0f);
+  EXPECT_FLOAT_EQ(Out1[0], 4.0f);
 }
 
 TEST(OutputTest, GetOutputIsConst) {
@@ -957,6 +944,70 @@ TEST(AddConnTest, NewConnectionParticipatesInForwardPass) {
 
   // Now output = 1*2 + 1*3 + 0.5*2 = 6.
   Net.DoForwardPass(In);
+  EXPECT_FLOAT_EQ(Net.GetOutput()[0], 6.0f);
+}
+
+// ---------------------------------------------------------------------------
+// Level and sort tests
+// ---------------------------------------------------------------------------
+
+TEST(LevelTest, InputsAtLevelZero) {
+  TestNetwork Net(3, 1);
+  auto &UA = Net.GetUnitAlloc();
+  for (size_t I = 0; I < 3; ++I)
+    EXPECT_EQ(UA.Get<plastix::LevelTag>(I), 0u);
+}
+
+TEST(LevelTest, FCLayerLevelProgression) {
+  // 2 inputs (level 0) -> 3 hidden (level 1) -> 1 output (level 2)
+  TestNetwork Net(2, FC{3}, FC{1});
+  auto &UA = Net.GetUnitAlloc();
+
+  EXPECT_EQ(UA.Get<plastix::LevelTag>(0), 0u); // input 0
+  EXPECT_EQ(UA.Get<plastix::LevelTag>(1), 0u); // input 1
+  EXPECT_EQ(UA.Get<plastix::LevelTag>(2), 1u); // hidden 0
+  EXPECT_EQ(UA.Get<plastix::LevelTag>(3), 1u); // hidden 1
+  EXPECT_EQ(UA.Get<plastix::LevelTag>(4), 1u); // hidden 2
+  EXPECT_EQ(UA.Get<plastix::LevelTag>(5), 2u); // output
+}
+
+TEST(LevelTest, ConnectionsSortedBySrcLevel) {
+  // 2 inputs -> 2 hidden -> 1 output
+  // After sort: level-0 source connections first, then level-1.
+  TestNetwork Net(2, FC{2}, FC{1});
+  auto &CA = Net.GetConnAlloc();
+
+  uint16_t PrevLevel = 0;
+  for (size_t C = 0; C < CA.Size(); ++C) {
+    uint16_t Lvl = CA.Get<plastix::SrcLevelTag>(C);
+    EXPECT_GE(Lvl, PrevLevel);
+    PrevLevel = Lvl;
+  }
+}
+
+TEST(LevelTest, ThreeLayerSinglePassPropagation) {
+  // 3 inputs -> 2 hidden -> 2 hidden -> 1 output, all weights=1
+  // Input = {1, 1, 1}
+  // Hidden layer 1: each = 1+1+1 = 3 (2 units)
+  // Hidden layer 2: each = 3+3 = 6 (2 units)
+  // Output: 6+6 = 12
+  TestNetwork Net(3, FC{2}, FC{2}, FC{1});
+  std::array<float, 3> In = {1.0f, 1.0f, 1.0f};
+  Net.DoForwardPass(In);
+  EXPECT_FLOAT_EQ(Net.GetOutput()[0], 12.0f);
+}
+
+TEST(LevelTest, AddConnectionTriggersResort) {
+  // After DoAddConnections, a subsequent DoForwardPass should see the new
+  // connection (which requires re-sorting).
+  plastix::Network<AddConnToOutputTraits> Net(2, 1);
+  std::array<float, 2> In = {2.0f, 3.0f};
+
+  Net.DoForwardPass(In);
+  EXPECT_FLOAT_EQ(Net.GetOutput()[0], 5.0f);
+
+  Net.DoAddConnections(); // adds 0→2 with w=0.5
+  Net.DoForwardPass(In);  // should re-sort and include new connection
   EXPECT_FLOAT_EQ(Net.GetOutput()[0], 6.0f);
 }
 
