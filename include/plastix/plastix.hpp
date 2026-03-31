@@ -5,8 +5,10 @@
 #include "plastix/layers.hpp"
 #include "plastix/traits.hpp"
 #include "plastix/unit_state.hpp"
+#include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <span>
 #include <type_traits>
 
@@ -18,6 +20,13 @@ const char *version();
 // ---------------------------------------------------------------------------
 // Network
 // ---------------------------------------------------------------------------
+
+static constexpr uint16_t MaxLevels = 1024;
+
+struct LevelRange {
+  uint32_t Begin;
+  uint32_t End;
+};
 
 template <NetworkTraits Traits> class Network {
   using UnitAllocator = typename Traits::UnitAllocator;
@@ -39,6 +48,7 @@ public:
     UnitRange Prev{0, InputDim};
     ((Prev = Layers(UnitAlloc, ConnAlloc, Prev)), ...);
     OutputRange = Prev;
+    SortConnectionsByLevel();
   }
 
   Network(size_t InputDim, size_t OutputDim = 1)
@@ -47,28 +57,35 @@ public:
   size_t GetStep() const { return Step; }
 
   void DoForwardPass(std::span<const float> Inputs) {
+    if (NeedsResort)
+      SortConnectionsByLevel();
+
     using FP = typename Traits::ForwardPass;
 
     for (size_t I = 0; I < NumInput; ++I)
-      PreviousActivation(I) = Inputs[I];
+      CurrentActivation(I) = Inputs[I];
 
     size_t NumUnits = UnitAlloc.Size();
     for (size_t I = NumInput; I < NumUnits; ++I)
       CurrentActivation(I) = 0.0f;
 
-    for (size_t C = 0; C < ConnAlloc.Size(); ++C) {
-      if (ConnAlloc.template Get<DeadTag>(C))
-        continue;
-      auto ToId = ConnAlloc.template Get<ToIdTag>(C);
-      auto FromId = ConnAlloc.template Get<FromIdTag>(C);
-      auto Weight = ConnAlloc.template Get<WeightTag>(C);
-      CurrentActivation(ToId) +=
-          FP::Map(UnitAlloc, ToId, Globals, Weight, PreviousActivation(FromId));
-    }
+    for (uint16_t L = 1; L <= NumLevels; ++L) {
+      for (uint32_t C = Ranges[L - 1].Begin; C < Ranges[L - 1].End; ++C) {
+        if (ConnAlloc.template Get<DeadTag>(C))
+          continue;
+        auto ToId = ConnAlloc.template Get<ToIdTag>(C);
+        auto FromId = ConnAlloc.template Get<FromIdTag>(C);
+        auto Weight = ConnAlloc.template Get<WeightTag>(C);
+        CurrentActivation(ToId) += FP::Map(UnitAlloc, ToId, Globals, Weight,
+                                           CurrentActivation(FromId));
+      }
 
-    for (size_t I = NumInput; I < NumUnits; ++I)
-      CurrentActivation(I) =
-          FP::CalculateAndApply(UnitAlloc, I, Globals, CurrentActivation(I));
+      for (size_t I = NumInput; I < NumUnits; ++I) {
+        if (UnitAlloc.template Get<LevelTag>(I) == L)
+          CurrentActivation(I) = FP::CalculateAndApply(UnitAlloc, I, Globals,
+                                                       CurrentActivation(I));
+      }
+    }
 
     ++Step;
   }
@@ -79,22 +96,26 @@ public:
     else {
       using BP = typename Traits::BackwardPass;
 
-      for (size_t C = 0; C < ConnAlloc.Size(); ++C) {
-        if (ConnAlloc.template Get<DeadTag>(C))
-          continue;
-        auto ToId = ConnAlloc.template Get<ToIdTag>(C);
-        auto FromId = ConnAlloc.template Get<FromIdTag>(C);
-        auto Weight = ConnAlloc.template Get<WeightTag>(C);
-        float DstAct = PreviousActivation(ToId);
-        UnitAlloc.template Get<BackwardAccTag>(FromId) +=
-            BP::Map(UnitAlloc, FromId, Globals, Weight, DstAct);
-      }
-
       size_t NumUnits = UnitAlloc.Size();
-      for (size_t I = 0; I < NumUnits; ++I) {
-        BP::CalculateAndApply(UnitAlloc, I, Globals,
-                              UnitAlloc.template Get<BackwardAccTag>(I));
-        UnitAlloc.template Get<BackwardAccTag>(I) = 0.0f;
+      for (uint16_t L = NumLevels; L >= 1; --L) {
+        for (uint32_t C = Ranges[L].Begin; C < Ranges[L].End; ++C) {
+          if (ConnAlloc.template Get<DeadTag>(C))
+            continue;
+          auto ToId = ConnAlloc.template Get<ToIdTag>(C);
+          auto FromId = ConnAlloc.template Get<FromIdTag>(C);
+          auto Weight = ConnAlloc.template Get<WeightTag>(C);
+          float DstAct = PreviousActivation(ToId);
+          UnitAlloc.template Get<BackwardAccTag>(FromId) +=
+              BP::Map(UnitAlloc, FromId, Globals, Weight, DstAct);
+        }
+
+        for (size_t I = NumInput; I < NumUnits; ++I) {
+          if (UnitAlloc.template Get<LevelTag>(I) == L) {
+            BP::CalculateAndApply(UnitAlloc, I, Globals,
+                                  UnitAlloc.template Get<BackwardAccTag>(I));
+            UnitAlloc.template Get<BackwardAccTag>(I) = 0.0f;
+          }
+        }
       }
     }
   }
@@ -214,6 +235,7 @@ public:
       return;
     else {
       using AC = typename Traits::AddConn;
+      size_t SizeBefore = ConnAlloc.Size();
       size_t NumUnits = UnitAlloc.Size();
       for (size_t Self = 0; Self < NumUnits; ++Self) {
         for (size_t Other = 0; Other < NumUnits; ++Other) {
@@ -229,6 +251,8 @@ public:
             ConnAlloc.template Get<ToIdTag>(ConnId) =
                 static_cast<uint32_t>(Self);
             ConnAlloc.template Get<WeightTag>(ConnId) = WeightIn;
+            ConnAlloc.template Get<SrcLevelTag>(ConnId) =
+                UnitAlloc.template Get<LevelTag>(Other);
           }
 
           auto [AddOut, WeightOut] =
@@ -240,9 +264,13 @@ public:
             ConnAlloc.template Get<ToIdTag>(ConnId) =
                 static_cast<uint32_t>(Other);
             ConnAlloc.template Get<WeightTag>(ConnId) = WeightOut;
+            ConnAlloc.template Get<SrcLevelTag>(ConnId) =
+                UnitAlloc.template Get<LevelTag>(Self);
           }
         }
       }
+      if (ConnAlloc.Size() > SizeBefore)
+        NeedsResort = true;
     }
   }
 
@@ -255,6 +283,8 @@ public:
     DoPruneConnections();
     DoAddUnits();
     DoAddConnections();
+    if (NeedsResort)
+      SortConnectionsByLevel();
   }
 
   std::span<const float> GetOutput() const {
@@ -281,12 +311,82 @@ private:
     return UnitAlloc.template Get<ActivationBTag>(Id);
   }
 
+  void RecomputeLevels() {
+    size_t NumUnits = UnitAlloc.Size();
+    for (size_t I = NumInput; I < NumUnits; ++I)
+      UnitAlloc.template Get<LevelTag>(I) = 0;
+
+    for (uint16_t Iter = 0; Iter < MaxLevels; ++Iter) {
+      bool Changed = false;
+      for (size_t C = 0; C < ConnAlloc.Size(); ++C) {
+        if (ConnAlloc.template Get<DeadTag>(C))
+          continue;
+        auto From = ConnAlloc.template Get<FromIdTag>(C);
+        auto To = ConnAlloc.template Get<ToIdTag>(C);
+        uint16_t NewLevel = UnitAlloc.template Get<LevelTag>(From) + 1;
+        auto &ToLevel = UnitAlloc.template Get<LevelTag>(To);
+        if (NewLevel > ToLevel) {
+          ToLevel = NewLevel;
+          Changed = true;
+        }
+      }
+      if (!Changed)
+        break;
+    }
+  }
+
+  void SortConnectionsByLevel() {
+    RecomputeLevels();
+
+    size_t N = ConnAlloc.Size();
+    if (N == 0) {
+      NumLevels = 0;
+      return;
+    }
+
+    for (size_t C = 0; C < N; ++C) {
+      auto From = ConnAlloc.template Get<FromIdTag>(C);
+      ConnAlloc.template Get<SrcLevelTag>(C) =
+          UnitAlloc.template Get<LevelTag>(From);
+    }
+
+    uint32_t Histogram[MaxLevels] = {};
+    for (size_t C = 0; C < N; ++C)
+      ++Histogram[ConnAlloc.template Get<SrcLevelTag>(C)];
+
+    uint32_t Offset = 0;
+    NumLevels = 0;
+    for (uint32_t L = 0; L < MaxLevels; ++L) {
+      Ranges[L].Begin = Offset;
+      Offset += Histogram[L];
+      Ranges[L].End = Offset;
+      if (Histogram[L] > 0)
+        NumLevels = L + 1;
+    }
+
+    uint32_t WritePos[MaxLevels];
+    for (uint32_t L = 0; L < MaxLevels; ++L)
+      WritePos[L] = Ranges[L].Begin;
+
+    size_t *Perm = ConnAlloc.PermutationScratch();
+    for (size_t C = 0; C < N; ++C) {
+      uint16_t Lvl = ConnAlloc.template Get<SrcLevelTag>(C);
+      Perm[WritePos[Lvl]++] = C;
+    }
+
+    ConnAlloc.Gather(N);
+    NeedsResort = false;
+  }
+
   size_t NumInput;
   size_t Step = 0;
   UnitRange OutputRange;
   UnitAllocator UnitAlloc;
   ConnAllocator ConnAlloc;
   GlobalState Globals;
+  std::array<LevelRange, MaxLevels> Ranges{};
+  uint16_t NumLevels = 0;
+  bool NeedsResort = false;
 };
 
 } // namespace plastix

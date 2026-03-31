@@ -48,4 +48,38 @@ TEST(SOAAllocatorTest, AllocateAtCapacity) {
   EXPECT_EQ(Alloc.Allocate(), static_cast<size_t>(-1));
 }
 
+TEST(SOAAllocatorTest, GatherReordersAllFields) {
+  TestAllocator Alloc(8);
+
+  for (int I = 0; I < 4; ++I) {
+    auto Id = Alloc.Allocate();
+    Alloc.Get<IntTag>(Id) = I * 10;        // 0, 10, 20, 30
+    Alloc.Get<SizeTTag>(Id) = I * 100u;    // 0, 100, 200, 300
+    Alloc.Get<BoolTag>(Id) = (I % 2 == 0); // T, F, T, F
+  }
+
+  // Reverse order permutation: [3, 2, 1, 0]
+  size_t *Perm = Alloc.PermutationScratch();
+  Perm[0] = 3;
+  Perm[1] = 2;
+  Perm[2] = 1;
+  Perm[3] = 0;
+  Alloc.Gather(4);
+
+  EXPECT_EQ(Alloc.Get<IntTag>(0), 30);
+  EXPECT_EQ(Alloc.Get<IntTag>(1), 20);
+  EXPECT_EQ(Alloc.Get<IntTag>(2), 10);
+  EXPECT_EQ(Alloc.Get<IntTag>(3), 0);
+
+  EXPECT_EQ(Alloc.Get<SizeTTag>(0), 300u);
+  EXPECT_EQ(Alloc.Get<SizeTTag>(1), 200u);
+  EXPECT_EQ(Alloc.Get<SizeTTag>(2), 100u);
+  EXPECT_EQ(Alloc.Get<SizeTTag>(3), 0u);
+
+  EXPECT_EQ(Alloc.Get<BoolTag>(0), false);
+  EXPECT_EQ(Alloc.Get<BoolTag>(1), true);
+  EXPECT_EQ(Alloc.Get<BoolTag>(2), false);
+  EXPECT_EQ(Alloc.Get<BoolTag>(3), true);
+}
+
 } // namespace
