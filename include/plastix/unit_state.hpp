@@ -2,6 +2,7 @@
 #define PLASTIX_UNIT_STATE_HPP
 
 #include "plastix/alloc.hpp"
+#include "plastix/position.hpp"
 
 namespace plastix {
 

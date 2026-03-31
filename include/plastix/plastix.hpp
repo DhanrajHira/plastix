@@ -30,8 +30,12 @@ public:
              (LayerBuilder<Builders, UnitAllocator, ConnAllocator> && ...))
   Network(size_t InputDim, Builders... Layers)
       : NumInput(InputDim), UnitAlloc(256), ConnAlloc(256) {
-    for (size_t I = 0; I < InputDim; ++I)
-      UnitAlloc.Allocate();
+    for (size_t I = 0; I < InputDim; ++I) {
+      auto Id = UnitAlloc.Allocate();
+      float Y = static_cast<float>(I) - static_cast<float>(InputDim - 1) / 2.0f;
+      UnitAlloc.template Get<PositionTag>(Id) = {
+          _Float16{0}, static_cast<_Float16>(Y), _Float16{0}, 0};
+    }
     UnitRange Prev{0, InputDim};
     ((Prev = Layers(UnitAlloc, ConnAlloc, Prev)), ...);
     OutputRange = Prev;
@@ -58,8 +62,8 @@ public:
       auto ToId = ConnAlloc.template Get<ToIdTag>(C);
       auto FromId = ConnAlloc.template Get<FromIdTag>(C);
       auto Weight = ConnAlloc.template Get<WeightTag>(C);
-      CurrentActivation(ToId) += FP::Map(UnitAlloc, ToId, Globals, Weight,
-                                         PreviousActivation(FromId));
+      CurrentActivation(ToId) +=
+          FP::Map(UnitAlloc, ToId, Globals, Weight, PreviousActivation(FromId));
     }
 
     for (size_t I = NumInput; I < NumUnits; ++I)
@@ -109,7 +113,8 @@ public:
         auto FromId = ConnAlloc.template Get<FromIdTag>(C);
         auto Weight = ConnAlloc.template Get<WeightTag>(C);
         auto &Acc = UnitAlloc.template Get<UpdateAccTag>(ToId);
-        Acc = UP::Combine(Acc, UP::Map(UnitAlloc, ToId, FromId, Globals, Weight));
+        Acc =
+            UP::Combine(Acc, UP::Map(UnitAlloc, ToId, FromId, Globals, Weight));
       }
 
       size_t NumUnits = UnitAlloc.Size();
@@ -181,16 +186,65 @@ public:
                    UnitAlloc.template Get<PrunedTag>(FromId);
         if constexpr (HasConnPrune)
           if (!Remove)
-            Remove = CP::ShouldPrune(UnitAlloc, ToId, FromId, ConnAlloc, C,
-                                     Globals);
+            Remove =
+                CP::ShouldPrune(UnitAlloc, ToId, FromId, ConnAlloc, C, Globals);
 
         if (Remove)
           ConnAlloc.template Get<DeadTag>(C) = true;
       }
     }
   }
-  void DoAddUnits() {}
-  void DoAddConnections() {}
+  void DoAddUnits() {
+    if constexpr (std::is_same_v<typename Traits::AddUnit, NoAddUnit>)
+      return;
+    else {
+      using AP = typename Traits::AddUnit;
+      size_t NumUnits = UnitAlloc.Size();
+      for (size_t I = 0; I < NumUnits; ++I) {
+        auto Pos = AP::AddUnit(UnitAlloc, I, Globals);
+        if (Pos) {
+          auto NewId = UnitAlloc.Allocate();
+          UnitAlloc.template Get<PositionTag>(NewId) = Pos;
+        }
+      }
+    }
+  }
+  void DoAddConnections() {
+    if constexpr (std::is_same_v<typename Traits::AddConn, NoAddConn>)
+      return;
+    else {
+      using AC = typename Traits::AddConn;
+      size_t NumUnits = UnitAlloc.Size();
+      for (size_t Self = 0; Self < NumUnits; ++Self) {
+        for (size_t Other = 0; Other < NumUnits; ++Other) {
+          if (Self == Other)
+            continue;
+
+          auto [AddIn, WeightIn] =
+              AC::ShouldAddIncomingConnection(UnitAlloc, Self, Other, Globals);
+          if (AddIn) {
+            auto ConnId = ConnAlloc.Allocate();
+            ConnAlloc.template Get<FromIdTag>(ConnId) =
+                static_cast<uint32_t>(Other);
+            ConnAlloc.template Get<ToIdTag>(ConnId) =
+                static_cast<uint32_t>(Self);
+            ConnAlloc.template Get<WeightTag>(ConnId) = WeightIn;
+          }
+
+          auto [AddOut, WeightOut] =
+              AC::ShouldAddOutgoingConnection(UnitAlloc, Self, Other, Globals);
+          if (AddOut) {
+            auto ConnId = ConnAlloc.Allocate();
+            ConnAlloc.template Get<FromIdTag>(ConnId) =
+                static_cast<uint32_t>(Self);
+            ConnAlloc.template Get<ToIdTag>(ConnId) =
+                static_cast<uint32_t>(Other);
+            ConnAlloc.template Get<WeightTag>(ConnId) = WeightOut;
+          }
+        }
+      }
+    }
+  }
 
   void DoStep(std::span<const float> Inputs) {
     DoForwardPass(Inputs);
