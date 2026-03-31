@@ -635,4 +635,329 @@ TEST(PruneTest, DoStepWithPrune) {
   EXPECT_EQ(CountAlive(CA), 0u);
 }
 
+// ---------------------------------------------------------------------------
+// Position tests
+// ---------------------------------------------------------------------------
+
+TEST(PositionTest, InputUnitsAtXZeroCenteredY) {
+  // 3 inputs: Y positions should be -1, 0, 1 centered at 0.
+  TestNetwork Net(3, 1);
+  auto &UA = Net.GetUnitAlloc();
+
+  auto P0 = UA.Get<plastix::PositionTag>(0);
+  auto P1 = UA.Get<plastix::PositionTag>(1);
+  auto P2 = UA.Get<plastix::PositionTag>(2);
+
+  // All at X=0, Z=0
+  EXPECT_EQ(static_cast<float>(P0.X), 0.0f);
+  EXPECT_EQ(static_cast<float>(P1.X), 0.0f);
+  EXPECT_EQ(static_cast<float>(P2.X), 0.0f);
+  EXPECT_EQ(static_cast<float>(P0.Z), 0.0f);
+
+  // Y centered: -1, 0, 1
+  EXPECT_EQ(static_cast<float>(P0.Y), -1.0f);
+  EXPECT_EQ(static_cast<float>(P1.Y), 0.0f);
+  EXPECT_EQ(static_cast<float>(P2.Y), 1.0f);
+}
+
+TEST(PositionTest, SingleInputAtOrigin) {
+  // 1 input: should be at (0, 0, 0).
+  TestNetwork Net(1, 1);
+  auto &UA = Net.GetUnitAlloc();
+  auto P = UA.Get<plastix::PositionTag>(0);
+  EXPECT_EQ(static_cast<float>(P.X), 0.0f);
+  EXPECT_EQ(static_cast<float>(P.Y), 0.0f);
+  EXPECT_EQ(static_cast<float>(P.Z), 0.0f);
+}
+
+TEST(PositionTest, FCLayerAtNextX) {
+  // 2 inputs -> 1 output. Output at X=1, Y=0.
+  TestNetwork Net(2, 1);
+  auto &UA = Net.GetUnitAlloc();
+  auto P = UA.Get<plastix::PositionTag>(2); // output unit
+  EXPECT_EQ(static_cast<float>(P.X), 1.0f);
+  EXPECT_EQ(static_cast<float>(P.Y), 0.0f);
+}
+
+TEST(PositionTest, FCLayerCenteredY) {
+  // 2 inputs -> 3 outputs. Outputs at X=1, Y=-1, 0, 1.
+  TestNetwork Net(2, 3);
+  auto &UA = Net.GetUnitAlloc();
+
+  EXPECT_EQ(static_cast<float>(UA.Get<plastix::PositionTag>(2).X), 1.0f);
+  EXPECT_EQ(static_cast<float>(UA.Get<plastix::PositionTag>(2).Y), -1.0f);
+  EXPECT_EQ(static_cast<float>(UA.Get<plastix::PositionTag>(3).Y), 0.0f);
+  EXPECT_EQ(static_cast<float>(UA.Get<plastix::PositionTag>(4).Y), 1.0f);
+}
+
+TEST(PositionTest, MultiLayerXProgression) {
+  // 2 inputs -> 3 hidden -> 1 output.
+  // Inputs at X=0, hidden at X=1, output at X=2.
+  using FC = plastix::FullyConnected;
+  TestNetwork Net(2, FC{3}, FC{1});
+  auto &UA = Net.GetUnitAlloc();
+
+  // Inputs at X=0
+  EXPECT_EQ(static_cast<float>(UA.Get<plastix::PositionTag>(0).X), 0.0f);
+  EXPECT_EQ(static_cast<float>(UA.Get<plastix::PositionTag>(1).X), 0.0f);
+
+  // Hidden at X=1, Y=-1, 0, 1
+  EXPECT_EQ(static_cast<float>(UA.Get<plastix::PositionTag>(2).X), 1.0f);
+  EXPECT_EQ(static_cast<float>(UA.Get<plastix::PositionTag>(2).Y), -1.0f);
+  EXPECT_EQ(static_cast<float>(UA.Get<plastix::PositionTag>(3).Y), 0.0f);
+  EXPECT_EQ(static_cast<float>(UA.Get<plastix::PositionTag>(4).Y), 1.0f);
+
+  // Output at X=2, Y=0
+  EXPECT_EQ(static_cast<float>(UA.Get<plastix::PositionTag>(5).X), 2.0f);
+  EXPECT_EQ(static_cast<float>(UA.Get<plastix::PositionTag>(5).Y), 0.0f);
+}
+
+// ---------------------------------------------------------------------------
+// AddUnit tests
+// ---------------------------------------------------------------------------
+
+// Policy that adds a new unit at (5, 5, 5) for unit 0 only.
+struct AddOneUnit {
+  static plastix::UnitPosition AddUnit(auto &, size_t Id, auto &) {
+    if (Id == 0)
+      return {_Float16{5}, _Float16{5}, _Float16{5}, 0};
+    return {};
+  }
+};
+
+struct AddUnitTraits
+    : plastix::DefaultNetworkTraits<plastix::UnitStateAllocator,
+                                    plastix::ConnStateAllocator> {
+  using AddUnit = AddOneUnit;
+};
+
+TEST(AddUnitTest, NoopDoesNotAddUnits) {
+  // Default traits have NoAddUnit — DoAddUnits is a no-op.
+  TestNetwork Net(2, 1);
+  EXPECT_EQ(Net.GetUnitAlloc().Size(), 3u);
+  Net.DoAddUnits();
+  EXPECT_EQ(Net.GetUnitAlloc().Size(), 3u);
+}
+
+TEST(AddUnitTest, AddsUnitAtReturnedPosition) {
+  // AddOneUnit returns non-zero for unit 0 only => 1 new unit.
+  plastix::Network<AddUnitTraits> Net(2, 1);
+  EXPECT_EQ(Net.GetUnitAlloc().Size(), 3u);
+
+  Net.DoAddUnits();
+  EXPECT_EQ(Net.GetUnitAlloc().Size(), 4u);
+
+  // New unit (id=3) should be at (5, 5, 5).
+  auto &UA = Net.GetUnitAlloc();
+  auto Pos = UA.Get<plastix::PositionTag>(3);
+  EXPECT_EQ(static_cast<float>(Pos.X), 5.0f);
+  EXPECT_EQ(static_cast<float>(Pos.Y), 5.0f);
+  EXPECT_EQ(static_cast<float>(Pos.Z), 5.0f);
+}
+
+TEST(AddUnitTest, ZeroReturnDoesNotAdd) {
+  // AddOneUnit returns zero for all units except unit 0.
+  // With 2 inputs + 1 output = 3 units, only unit 0 triggers an add.
+  plastix::Network<AddUnitTraits> Net(2, 1);
+  Net.DoAddUnits();
+  // Exactly 1 new unit added (from unit 0).
+  EXPECT_EQ(Net.GetUnitAlloc().Size(), 4u);
+}
+
+TEST(AddUnitTest, DoesNotIterateNewlyAddedUnits) {
+  // The loop captures Size() before iterating, so newly added units
+  // in this call are not visited.
+  plastix::Network<AddUnitTraits> Net(2, 1);
+  Net.DoAddUnits(); // adds 1 unit (from unit 0)
+  EXPECT_EQ(Net.GetUnitAlloc().Size(), 4u);
+
+  // Second call: now 4 units exist, but only unit 0 triggers an add.
+  Net.DoAddUnits();
+  EXPECT_EQ(Net.GetUnitAlloc().Size(), 5u);
+}
+
+TEST(AddUnitTest, NewUnitDefaultActivation) {
+  // Newly added unit should have zero activations.
+  plastix::Network<AddUnitTraits> Net(2, 1);
+  Net.DoAddUnits();
+
+  auto &UA = Net.GetUnitAlloc();
+  EXPECT_FLOAT_EQ(UA.Get<plastix::ActivationATag>(3), 0.0f);
+  EXPECT_FLOAT_EQ(UA.Get<plastix::ActivationBTag>(3), 0.0f);
+  EXPECT_FALSE(UA.Get<plastix::PrunedTag>(3));
+}
+
+// ---------------------------------------------------------------------------
+// AddConn tests
+// ---------------------------------------------------------------------------
+
+// Policy that adds one incoming connection: unit 0 accepts from unit 1.
+struct AddOneIncoming {
+  static plastix::AddConnResult
+  ShouldAddIncomingConnection(auto &, size_t Self, size_t Candidate, auto &) {
+    if (Self == 0 && Candidate == 1)
+      return {true, 0.5f};
+    return {false, 0.0f};
+  }
+  static plastix::AddConnResult ShouldAddOutgoingConnection(auto &, size_t,
+                                                            size_t, auto &) {
+    return {false, 0.0f};
+  }
+};
+
+struct AddIncomingTraits
+    : plastix::DefaultNetworkTraits<plastix::UnitStateAllocator,
+                                    plastix::ConnStateAllocator> {
+  using AddConn = AddOneIncoming;
+};
+
+// Policy that adds one outgoing connection: unit 1 sends to unit 0.
+struct AddOneOutgoing {
+  static plastix::AddConnResult ShouldAddIncomingConnection(auto &, size_t,
+                                                            size_t, auto &) {
+    return {false, 0.0f};
+  }
+  static plastix::AddConnResult
+  ShouldAddOutgoingConnection(auto &, size_t Self, size_t Candidate, auto &) {
+    if (Self == 1 && Candidate == 0)
+      return {true, 0.75f};
+    return {false, 0.0f};
+  }
+};
+
+struct AddOutgoingTraits
+    : plastix::DefaultNetworkTraits<plastix::UnitStateAllocator,
+                                    plastix::ConnStateAllocator> {
+  using AddConn = AddOneOutgoing;
+};
+
+// Policy that adds via both methods: incoming 1→0, outgoing 2→0.
+struct AddBothDirections {
+  static plastix::AddConnResult
+  ShouldAddIncomingConnection(auto &, size_t Self, size_t Candidate, auto &) {
+    if (Self == 0 && Candidate == 1)
+      return {true, 0.3f};
+    return {false, 0.0f};
+  }
+  static plastix::AddConnResult
+  ShouldAddOutgoingConnection(auto &, size_t Self, size_t Candidate, auto &) {
+    if (Self == 2 && Candidate == 0)
+      return {true, 0.7f};
+    return {false, 0.0f};
+  }
+};
+
+struct AddBothTraits
+    : plastix::DefaultNetworkTraits<plastix::UnitStateAllocator,
+                                    plastix::ConnStateAllocator> {
+  using AddConn = AddBothDirections;
+};
+
+TEST(AddConnTest, NoopDoesNotAddConnections) {
+  TestNetwork Net(2, 1);
+  EXPECT_EQ(Net.GetConnAlloc().Size(), 2u);
+  Net.DoAddConnections();
+  EXPECT_EQ(Net.GetConnAlloc().Size(), 2u);
+}
+
+TEST(AddConnTest, AddsIncomingConnection) {
+  // 2 inputs (0,1) + 1 output (2) = 3 units, 2 initial connections.
+  // Policy adds incoming to unit 0 from unit 1 with weight 0.5.
+  plastix::Network<AddIncomingTraits> Net(2, 1);
+  EXPECT_EQ(Net.GetConnAlloc().Size(), 2u);
+
+  Net.DoAddConnections();
+
+  auto &CA = Net.GetConnAlloc();
+  EXPECT_EQ(CA.Size(), 3u);
+
+  // New connection (id=2): From=1, To=0, Weight=0.5
+  EXPECT_EQ(CA.Get<plastix::FromIdTag>(2), 1u);
+  EXPECT_EQ(CA.Get<plastix::ToIdTag>(2), 0u);
+  EXPECT_FLOAT_EQ(CA.Get<plastix::WeightTag>(2), 0.5f);
+  EXPECT_FALSE(CA.Get<plastix::DeadTag>(2));
+}
+
+TEST(AddConnTest, AddsOutgoingConnection) {
+  // Policy adds outgoing from unit 1 to unit 0 with weight 0.75.
+  plastix::Network<AddOutgoingTraits> Net(2, 1);
+  Net.DoAddConnections();
+
+  auto &CA = Net.GetConnAlloc();
+  EXPECT_EQ(CA.Size(), 3u);
+
+  // New connection (id=2): From=1, To=0, Weight=0.75
+  EXPECT_EQ(CA.Get<plastix::FromIdTag>(2), 1u);
+  EXPECT_EQ(CA.Get<plastix::ToIdTag>(2), 0u);
+  EXPECT_FLOAT_EQ(CA.Get<plastix::WeightTag>(2), 0.75f);
+}
+
+TEST(AddConnTest, BothIncomingAndOutgoing) {
+  // Policy adds two connections: incoming 1→0 (0.3), outgoing 2→0 (0.7).
+  plastix::Network<AddBothTraits> Net(2, 1);
+  Net.DoAddConnections();
+
+  auto &CA = Net.GetConnAlloc();
+  EXPECT_EQ(CA.Size(), 4u);
+
+  // Find the two new connections by weight.
+  bool FoundIncoming = false, FoundOutgoing = false;
+  for (size_t C = 2; C < CA.Size(); ++C) {
+    auto From = CA.Get<plastix::FromIdTag>(C);
+    auto To = CA.Get<plastix::ToIdTag>(C);
+    auto W = CA.Get<plastix::WeightTag>(C);
+    if (From == 1 && To == 0 && std::abs(W - 0.3f) < 1e-6f)
+      FoundIncoming = true;
+    if (From == 2 && To == 0 && std::abs(W - 0.7f) < 1e-6f)
+      FoundOutgoing = true;
+  }
+  EXPECT_TRUE(FoundIncoming);
+  EXPECT_TRUE(FoundOutgoing);
+}
+
+TEST(AddConnTest, CalledTwiceAddsAgain) {
+  // Policy fires every call — no dedup, so two calls = two connections.
+  plastix::Network<AddIncomingTraits> Net(2, 1);
+  Net.DoAddConnections();
+  EXPECT_EQ(Net.GetConnAlloc().Size(), 3u);
+  Net.DoAddConnections();
+  EXPECT_EQ(Net.GetConnAlloc().Size(), 4u);
+}
+
+// Policy that adds a connection 0→2 with weight 0.5 (targets the output unit).
+struct AddConnToOutput {
+  static plastix::AddConnResult
+  ShouldAddIncomingConnection(auto &, size_t Self, size_t Candidate, auto &) {
+    if (Self == 2 && Candidate == 0)
+      return {true, 0.5f};
+    return {false, 0.0f};
+  }
+  static plastix::AddConnResult ShouldAddOutgoingConnection(auto &, size_t,
+                                                            size_t, auto &) {
+    return {false, 0.0f};
+  }
+};
+
+struct AddConnToOutputTraits
+    : plastix::DefaultNetworkTraits<plastix::UnitStateAllocator,
+                                    plastix::ConnStateAllocator> {
+  using AddConn = AddConnToOutput;
+};
+
+TEST(AddConnTest, NewConnectionParticipatesInForwardPass) {
+  // 2 inputs (0,1), 1 output (2). Initial: 0→2 (w=1), 1→2 (w=1).
+  // inputs={2, 3} => output = 1*2 + 1*3 = 5.
+  plastix::Network<AddConnToOutputTraits> Net(2, 1);
+  std::array<float, 2> In = {2.0f, 3.0f};
+  Net.DoForwardPass(In);
+  EXPECT_FLOAT_EQ(Net.GetOutput()[0], 5.0f);
+
+  // Add connection 0→2 with weight 0.5.
+  Net.DoAddConnections();
+
+  // Now output = 1*2 + 1*3 + 0.5*2 = 6.
+  Net.DoForwardPass(In);
+  EXPECT_FLOAT_EQ(Net.GetOutput()[0], 6.0f);
+}
+
 } // namespace plastix_test

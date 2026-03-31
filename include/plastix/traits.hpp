@@ -1,6 +1,7 @@
 #ifndef PLASTIX_TRAITS_HPP
 #define PLASTIX_TRAITS_HPP
 
+#include "plastix/position.hpp"
 #include <concepts>
 #include <cstddef>
 
@@ -81,16 +82,15 @@ concept AddUnitPolicy =
 // Both sweeps iterate pages in the same order, so PageId/SlotIdx give direct
 // write access to the weight stored in the connection page.
 template <typename P, typename UnitAlloc, typename ConnAlloc, typename Global>
-concept UpdateConnPolicy =
-    requires(UnitAlloc &U, size_t DstId, size_t SrcId, ConnAlloc &C,
-             size_t ConnId, Global &G) {
-      {
-        P::UpdateIncomingConnection(U, DstId, SrcId, C, ConnId, G)
-      } -> std::same_as<void>;
-      {
-        P::UpdateOutgoingConnection(U, SrcId, DstId, C, ConnId, G)
-      } -> std::same_as<void>;
-    };
+concept UpdateConnPolicy = requires(UnitAlloc &U, size_t DstId, size_t SrcId,
+                                    ConnAlloc &C, size_t ConnId, Global &G) {
+  {
+    P::UpdateIncomingConnection(U, DstId, SrcId, C, ConnId, G)
+  } -> std::same_as<void>;
+  {
+    P::UpdateOutgoingConnection(U, SrcId, DstId, C, ConnId, G)
+  } -> std::same_as<void>;
+};
 
 // AddConnPolicy determines if a connection should be added between two units
 // and then adds it if so.
@@ -118,12 +118,32 @@ concept PruneUnitPolicy = requires(UnitAlloc &U, size_t Id, Global &G) {
 // pruning (e.g. weight-magnitude thresholding). Both unit and connection
 // pruning are evaluated together in DoPruneConnections().
 template <typename P, typename UnitAlloc, typename ConnAlloc, typename Global>
-concept PruneConnPolicy =
-    requires(UnitAlloc &U, size_t DstId, size_t SrcId, ConnAlloc &C,
-             size_t ConnId, Global &G) {
+concept PruneConnPolicy = requires(UnitAlloc &U, size_t DstId, size_t SrcId,
+                                   ConnAlloc &C, size_t ConnId, Global &G) {
+  {
+    P::ShouldPrune(U, DstId, SrcId, C, ConnId, G)
+  } -> std::convertible_to<bool>;
+};
+
+template <typename P, typename UnitAlloc, typename Global>
+concept AddUnitPolicy = requires(UnitAlloc &U, size_t Id, Global &G) {
+  { P::AddUnit(U, Id, G) } -> std::convertible_to<UnitPosition>;
+};
+
+struct AddConnResult {
+  bool ShouldAdd;
+  float Weight;
+};
+
+template <typename P, typename UnitAlloc, typename Global>
+concept AddConnPolicy =
+    requires(UnitAlloc &U, size_t SelfId, size_t CandidateId, Global &G) {
       {
-        P::ShouldPrune(U, DstId, SrcId, C, ConnId, G)
-      } -> std::convertible_to<bool>;
+        P::ShouldAddIncomingConnection(U, SelfId, CandidateId, G)
+      } -> std::convertible_to<AddConnResult>;
+      {
+        P::ShouldAddOutgoingConnection(U, SelfId, CandidateId, G)
+      } -> std::convertible_to<AddConnResult>;
     };
 
 // ---------------------------------------------------------------------------
@@ -189,10 +209,21 @@ struct NoPruneConn {
   }
 };
 
-// GlobalState is a user-defined struct passed by reference to every policy
-// method. Use it for shared hyperparameters (learning rates, time step, etc.)
-// that are not specific to any single unit or connection. EmptyGlobalState is
-// the default when no shared state is needed.
+struct NoAddUnit {
+  static UnitPosition AddUnit(auto &, size_t, auto &) { return {}; }
+};
+
+struct NoAddConn {
+  static AddConnResult ShouldAddIncomingConnection(auto &, size_t, size_t,
+                                                   auto &) {
+    return {false, 0.0f};
+  }
+  static AddConnResult ShouldAddOutgoingConnection(auto &, size_t, size_t,
+                                                   auto &) {
+    return {false, 0.0f};
+  }
+};
+
 struct EmptyGlobalState {};
 
 // ---------------------------------------------------------------------------
@@ -225,6 +256,8 @@ struct DefaultNetworkTraits {
   using AddConn = NoAddConn;
   using PruneUnit = NoPruneUnit;
   using PruneConn = NoPruneConn;
+  using AddUnit = NoAddUnit;
+  using AddConn = NoAddConn;
 };
 
 // ---------------------------------------------------------------------------
@@ -247,6 +280,8 @@ concept NetworkTraits =
       typename T::AddConn;
       typename T::PruneUnit;
       typename T::PruneConn;
+      typename T::AddUnit;
+      typename T::AddConn;
     } &&
     PassPolicy<typename T::ForwardPass, typename T::UnitAllocator,
                typename T::GlobalState> &&
@@ -263,7 +298,11 @@ concept NetworkTraits =
     PruneUnitPolicy<typename T::PruneUnit, typename T::UnitAllocator,
                     typename T::GlobalState> &&
     PruneConnPolicy<typename T::PruneConn, typename T::UnitAllocator,
-                    typename T::ConnAllocator, typename T::GlobalState>;
+                    typename T::ConnAllocator, typename T::GlobalState> &&
+    AddUnitPolicy<typename T::AddUnit, typename T::UnitAllocator,
+                  typename T::GlobalState> &&
+    AddConnPolicy<typename T::AddConn, typename T::UnitAllocator,
+                  typename T::GlobalState>;
 
 } // namespace plastix
 
