@@ -31,18 +31,11 @@ struct FullyConnected {
       UA.Allocate();
 
     for (size_t U = Begin; U < Begin + NumUnits; ++U) {
-      size_t SlotIdx = 0;
-      auto PageId = CA.Allocate();
       for (size_t Src = PrevLayer.Begin; Src < PrevLayer.End; ++Src) {
-        if (SlotIdx == ConnPageSlotSize) {
-          PageId = CA.Allocate();
-          SlotIdx = 0;
-        }
-        auto &Page = CA.template Get<ConnPageMarker>(PageId);
-        Page.ToUnitIdx = U;
-        Page.Count = SlotIdx + 1;
-        Page.Conn[SlotIdx] = {static_cast<uint32_t>(Src), InitWeight};
-        ++SlotIdx;
+        auto ConnId = CA.Allocate();
+        CA.template Get<ToIdTag>(ConnId) = static_cast<uint32_t>(U);
+        CA.template Get<FromIdTag>(ConnId) = static_cast<uint32_t>(Src);
+        CA.template Get<WeightTag>(ConnId) = InitWeight;
       }
     }
     return {Begin, Begin + NumUnits};

@@ -32,12 +32,12 @@ concept UpdateUnitPolicy =
 template <typename P, typename UnitAlloc, typename ConnAlloc, typename Global>
 concept UpdateConnPolicy =
     requires(UnitAlloc &U, size_t DstId, size_t SrcId, ConnAlloc &C,
-             size_t PageId, size_t SlotIdx, Global &G) {
+             size_t ConnId, Global &G) {
       {
-        P::UpdateIncomingConnection(U, DstId, SrcId, C, PageId, SlotIdx, G)
+        P::UpdateIncomingConnection(U, DstId, SrcId, C, ConnId, G)
       } -> std::same_as<void>;
       {
-        P::UpdateOutgoingConnection(U, SrcId, DstId, C, PageId, SlotIdx, G)
+        P::UpdateOutgoingConnection(U, SrcId, DstId, C, ConnId, G)
       } -> std::same_as<void>;
     };
 
@@ -49,9 +49,9 @@ concept PruneUnitPolicy = requires(UnitAlloc &U, size_t Id, Global &G) {
 template <typename P, typename UnitAlloc, typename ConnAlloc, typename Global>
 concept PruneConnPolicy =
     requires(UnitAlloc &U, size_t DstId, size_t SrcId, ConnAlloc &C,
-             size_t PageId, size_t SlotIdx, Global &G) {
+             size_t ConnId, Global &G) {
       {
-        P::ShouldPrune(U, DstId, SrcId, C, PageId, SlotIdx, G)
+        P::ShouldPrune(U, DstId, SrcId, C, ConnId, G)
       } -> std::convertible_to<bool>;
     };
 
@@ -84,9 +84,9 @@ struct NoUpdateUnit {
 
 struct NoUpdateConn {
   static void UpdateIncomingConnection(auto &, size_t, size_t, auto &, size_t,
-                                       size_t, auto &) {}
+                                       auto &) {}
   static void UpdateOutgoingConnection(auto &, size_t, size_t, auto &, size_t,
-                                       size_t, auto &) {}
+                                       auto &) {}
 };
 
 struct NoPruneUnit {
@@ -94,8 +94,7 @@ struct NoPruneUnit {
 };
 
 struct NoPruneConn {
-  static bool ShouldPrune(auto &, size_t, size_t, auto &, size_t, size_t,
-                          auto &) {
+  static bool ShouldPrune(auto &, size_t, size_t, auto &, size_t, auto &) {
     return false;
   }
 };

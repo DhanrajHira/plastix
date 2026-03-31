@@ -2,30 +2,22 @@
 #define PLASTIX_CONN_HPP
 
 #include "plastix/alloc.hpp"
-#include <array>
-#include <cstddef>
-#include <cstdint>
-#include <utility>
 
 namespace plastix {
 
-constexpr static size_t ConnPageSlotSize = 7;
+#define PLASTIX_SOA_MODE_TAGS
+#include "plastix/soa.hpp"
+#include "conn_state.inc"
 
-struct ConnPage {
-  uint32_t ToUnitIdx;
-  uint32_t Count;
-  std::array<std::pair<uint32_t, float>, ConnPageSlotSize> Conn;
+#define PLASTIX_SOA_MODE_ALLOC
+#include "plastix/soa.hpp"
+#include "conn_state.inc"
 
-  const auto &GetSlot(size_t I) const { return Conn[I]; }
-  auto &WriteSlot(size_t I) { return Conn[I]; }
-};
+#define PLASTIX_SOA_MODE_HANDLE
+#include "plastix/soa.hpp"
+#include "conn_state.inc"
 
-struct ConnectionState {};
-struct ConnPageMarker {};
-
-using ConnStateAllocator =
-    alloc::PageAllocator<ConnectionState,
-                         alloc::SOAField<ConnPageMarker, ConnPage>>;
+using ConnStateAllocator = ConnectionStateAllocator;
 
 } // namespace plastix
 

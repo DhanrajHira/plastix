@@ -5,7 +5,6 @@
 #include "plastix/layers.hpp"
 #include "plastix/traits.hpp"
 #include "plastix/unit_state.hpp"
-#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <span>
@@ -53,25 +52,15 @@ public:
     for (size_t I = NumInput; I < NumUnits; ++I)
       CurrentActivation(I) = 0.0f;
 
-    size_t CurDst = static_cast<size_t>(-1);
-    float Acc = 0.0f;
-
-    for (size_t P = 0; P < ConnAlloc.Size(); ++P) {
-      auto &Page = ConnAlloc.template Get<ConnPageMarker>(P);
-      if (Page.ToUnitIdx != CurDst) {
-        if (CurDst != static_cast<size_t>(-1))
-          CurrentActivation(CurDst) += Acc;
-        CurDst = Page.ToUnitIdx;
-        Acc = 0.0f;
-      }
-      for (size_t S = 0; S < Page.Count; ++S) {
-        auto [SrcId, Weight] = Page.Conn[S];
-        Acc += FP::Map(UnitAlloc, CurDst, Globals, Weight,
-                       PreviousActivation(SrcId));
-      }
+    for (size_t C = 0; C < ConnAlloc.Size(); ++C) {
+      if (ConnAlloc.template Get<DeadTag>(C))
+        continue;
+      auto ToId = ConnAlloc.template Get<ToIdTag>(C);
+      auto FromId = ConnAlloc.template Get<FromIdTag>(C);
+      auto Weight = ConnAlloc.template Get<WeightTag>(C);
+      CurrentActivation(ToId) += FP::Map(UnitAlloc, ToId, Globals, Weight,
+                                         PreviousActivation(FromId));
     }
-    if (CurDst != static_cast<size_t>(-1))
-      CurrentActivation(CurDst) += Acc;
 
     for (size_t I = NumInput; I < NumUnits; ++I)
       CurrentActivation(I) =
@@ -86,14 +75,15 @@ public:
     else {
       using BP = typename Traits::BackwardPass;
 
-      for (size_t P = 0; P < ConnAlloc.Size(); ++P) {
-        auto &Page = ConnAlloc.template Get<ConnPageMarker>(P);
-        float DstAct = PreviousActivation(Page.ToUnitIdx);
-        for (size_t S = 0; S < Page.Count; ++S) {
-          auto [SrcId, Weight] = Page.Conn[S];
-          UnitAlloc.template Get<BackwardAccTag>(SrcId) +=
-              BP::Map(UnitAlloc, SrcId, Globals, Weight, DstAct);
-        }
+      for (size_t C = 0; C < ConnAlloc.Size(); ++C) {
+        if (ConnAlloc.template Get<DeadTag>(C))
+          continue;
+        auto ToId = ConnAlloc.template Get<ToIdTag>(C);
+        auto FromId = ConnAlloc.template Get<FromIdTag>(C);
+        auto Weight = ConnAlloc.template Get<WeightTag>(C);
+        float DstAct = PreviousActivation(ToId);
+        UnitAlloc.template Get<BackwardAccTag>(FromId) +=
+            BP::Map(UnitAlloc, FromId, Globals, Weight, DstAct);
       }
 
       size_t NumUnits = UnitAlloc.Size();
@@ -112,14 +102,14 @@ public:
       using UP = typename Traits::UpdateUnit;
       using Partial = typename UP::Partial;
 
-      for (size_t P = 0; P < ConnAlloc.Size(); ++P) {
-        auto &Page = ConnAlloc.template Get<ConnPageMarker>(P);
-        auto &Acc = UnitAlloc.template Get<UpdateAccTag>(Page.ToUnitIdx);
-        for (size_t S = 0; S < Page.Count; ++S) {
-          auto [SrcId, Weight] = Page.Conn[S];
-          Acc = UP::Combine(
-              Acc, UP::Map(UnitAlloc, Page.ToUnitIdx, SrcId, Globals, Weight));
-        }
+      for (size_t C = 0; C < ConnAlloc.Size(); ++C) {
+        if (ConnAlloc.template Get<DeadTag>(C))
+          continue;
+        auto ToId = ConnAlloc.template Get<ToIdTag>(C);
+        auto FromId = ConnAlloc.template Get<FromIdTag>(C);
+        auto Weight = ConnAlloc.template Get<WeightTag>(C);
+        auto &Acc = UnitAlloc.template Get<UpdateAccTag>(ToId);
+        Acc = UP::Combine(Acc, UP::Map(UnitAlloc, ToId, FromId, Globals, Weight));
       }
 
       size_t NumUnits = UnitAlloc.Size();
@@ -137,20 +127,22 @@ public:
     else {
       using UP = typename Traits::UpdateConn;
 
-      for (size_t P = 0; P < ConnAlloc.Size(); ++P) {
-        auto &Page = ConnAlloc.template Get<ConnPageMarker>(P);
-        for (size_t S = 0; S < Page.Count; ++S)
-          UP::UpdateIncomingConnection(UnitAlloc, Page.ToUnitIdx,
-                                       Page.Conn[S].first, ConnAlloc, P, S,
-                                       Globals);
+      for (size_t C = 0; C < ConnAlloc.Size(); ++C) {
+        if (ConnAlloc.template Get<DeadTag>(C))
+          continue;
+        auto ToId = ConnAlloc.template Get<ToIdTag>(C);
+        auto FromId = ConnAlloc.template Get<FromIdTag>(C);
+        UP::UpdateIncomingConnection(UnitAlloc, ToId, FromId, ConnAlloc, C,
+                                     Globals);
       }
 
-      for (size_t P = 0; P < ConnAlloc.Size(); ++P) {
-        auto &Page = ConnAlloc.template Get<ConnPageMarker>(P);
-        for (size_t S = 0; S < Page.Count; ++S)
-          UP::UpdateOutgoingConnection(UnitAlloc, Page.Conn[S].first,
-                                       Page.ToUnitIdx, ConnAlloc, P, S,
-                                       Globals);
+      for (size_t C = 0; C < ConnAlloc.Size(); ++C) {
+        if (ConnAlloc.template Get<DeadTag>(C))
+          continue;
+        auto ToId = ConnAlloc.template Get<ToIdTag>(C);
+        auto FromId = ConnAlloc.template Get<FromIdTag>(C);
+        UP::UpdateOutgoingConnection(UnitAlloc, FromId, ToId, ConnAlloc, C,
+                                     Globals);
       }
     }
   }
@@ -177,32 +169,23 @@ public:
       constexpr bool HasConnPrune =
           !std::is_same_v<typename Traits::PruneConn, NoPruneConn>;
 
-      for (size_t P = 0; P < ConnAlloc.Size(); ++P) {
-        auto &Page = ConnAlloc.template Get<ConnPageMarker>(P);
-        if (Page.Count == 0)
+      for (size_t C = 0; C < ConnAlloc.Size(); ++C) {
+        if (ConnAlloc.template Get<DeadTag>(C))
           continue;
+        auto ToId = ConnAlloc.template Get<ToIdTag>(C);
+        auto FromId = ConnAlloc.template Get<FromIdTag>(C);
 
-        if constexpr (HasUnitPrune) {
-          if (UnitAlloc.template Get<PrunedTag>(Page.ToUnitIdx)) {
-            Page.Count = 0;
-            continue;
-          }
-        }
-
-        uint32_t Alive = 0;
-        for (size_t S = 0; S < Page.Count; ++S) {
-          bool Remove = false;
-          if constexpr (HasUnitPrune)
-            Remove = UnitAlloc.template Get<PrunedTag>(Page.Conn[S].first);
-          if constexpr (HasConnPrune)
-            Remove = Remove || CP::ShouldPrune(UnitAlloc, Page.ToUnitIdx,
-                                               Page.Conn[S].first, ConnAlloc, P,
-                                               S, Globals);
+        bool Remove = false;
+        if constexpr (HasUnitPrune)
+          Remove = UnitAlloc.template Get<PrunedTag>(ToId) ||
+                   UnitAlloc.template Get<PrunedTag>(FromId);
+        if constexpr (HasConnPrune)
           if (!Remove)
-            Alive |= (1u << S);
-        }
-        Page.Count = std::popcount(Alive);
-        ConnAlloc.CompactPage(P, Alive);
+            Remove = CP::ShouldPrune(UnitAlloc, ToId, FromId, ConnAlloc, C,
+                                     Globals);
+
+        if (Remove)
+          ConnAlloc.template Get<DeadTag>(C) = true;
       }
     }
   }
