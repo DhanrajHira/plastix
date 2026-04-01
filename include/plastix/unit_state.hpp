@@ -6,21 +6,28 @@
 
 namespace plastix {
 
-// Generates UnitState tags, UnitStateAllocator, and UnitStateHandle from the
-// field list in unit_state.inc by including soa.hpp once per mode.
-// See soa.hpp for a full explanation of the three-pass X-macro pattern.
+struct UnitState {};
+using UnitStateId = alloc::AllocId<UnitState>;
 
-#define PLASTIX_SOA_MODE_TAGS
-#include "plastix/soa.hpp"
-#include "unit_state.inc"
+struct ActivationTag {};
+struct ForwardAccTag {};
+struct BackwardAccTag {};
+struct UpdateAccTag {};
+struct PrunedTag {};
+struct PositionTag {};
+struct LevelTag {};
 
-#define PLASTIX_SOA_MODE_ALLOC
-#include "plastix/soa.hpp"
-#include "unit_state.inc"
+template <typename FwdAcc, typename BwdAcc, typename UpdAcc>
+using MakeUnitAllocator =
+    alloc::SOAAllocator<UnitState, alloc::SOAField<ActivationTag, float>,
+                        alloc::SOAField<ForwardAccTag, FwdAcc>,
+                        alloc::SOAField<BackwardAccTag, BwdAcc>,
+                        alloc::SOAField<UpdateAccTag, UpdAcc>,
+                        alloc::SOAField<PrunedTag, bool>,
+                        alloc::SOAField<PositionTag, UnitPosition>,
+                        alloc::SOAField<LevelTag, uint16_t>>;
 
-#define PLASTIX_SOA_MODE_HANDLE
-#include "plastix/soa.hpp"
-#include "unit_state.inc"
+using UnitStateAllocator = MakeUnitAllocator<float, float, float>;
 
 } // namespace plastix
 
