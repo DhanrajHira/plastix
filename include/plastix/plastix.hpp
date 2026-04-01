@@ -5,7 +5,6 @@
 #include "plastix/layers.hpp"
 #include "plastix/traits.hpp"
 #include "plastix/unit_state.hpp"
-#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <span>
@@ -21,7 +20,10 @@ const char *version();
 // ---------------------------------------------------------------------------
 
 template <NetworkTraits Traits> class Network {
-  using UnitAllocator = typename Traits::UnitAllocator;
+  using UnitAllocator =
+      MakeUnitAllocator<typename Traits::ForwardPass::Accumulator,
+                        typename Traits::BackwardPass::Accumulator,
+                        typename Traits::UpdateUnit::Partial>;
   using ConnAllocator = typename Traits::ConnAllocator;
   using GlobalState = typename Traits::GlobalState;
 
@@ -45,37 +47,30 @@ public:
 
   void DoForwardPass(std::span<const float> Inputs) {
     using FP = typename Traits::ForwardPass;
+    using Acc = typename FP::Accumulator;
 
     for (size_t I = 0; I < NumInput; ++I)
-      PreviousActivation(I) = Inputs[I];
+      UnitAlloc.template Get<ActivationTag>(I) = Inputs[I];
 
     size_t NumUnits = UnitAlloc.Size();
     for (size_t I = NumInput; I < NumUnits; ++I)
-      CurrentActivation(I) = 0.0f;
-
-    size_t CurDst = static_cast<size_t>(-1);
-    float Acc = 0.0f;
+      UnitAlloc.template Get<ForwardAccTag>(I) = Acc{};
 
     for (size_t P = 0; P < ConnAlloc.Size(); ++P) {
       auto &Page = ConnAlloc.template Get<ConnPageMarker>(P);
-      if (Page.ToUnitIdx != CurDst) {
-        if (CurDst != static_cast<size_t>(-1))
-          CurrentActivation(CurDst) += Acc;
-        CurDst = Page.ToUnitIdx;
-        Acc = 0.0f;
-      }
+      auto &UAcc = UnitAlloc.template Get<ForwardAccTag>(Page.ToUnitIdx);
       for (size_t S = 0; S < Page.Count; ++S) {
-        auto [SrcId, Weight] = Page.Conn[S];
-        Acc += FP::Map(UnitAlloc, CurDst, Globals, Weight,
-                       PreviousActivation(SrcId));
+        UAcc = FP::Combine(UAcc, FP::Map(UnitAlloc, Page.ToUnitIdx,
+                                         Page.Conn[S].first, ConnAlloc, P, S,
+                                         Globals));
       }
     }
-    if (CurDst != static_cast<size_t>(-1))
-      CurrentActivation(CurDst) += Acc;
 
-    for (size_t I = NumInput; I < NumUnits; ++I)
-      CurrentActivation(I) =
-          FP::CalculateAndApply(UnitAlloc, I, Globals, CurrentActivation(I));
+    for (size_t I = NumInput; I < NumUnits; ++I) {
+      auto &UAcc = UnitAlloc.template Get<ForwardAccTag>(I);
+      FP::Apply(UnitAlloc, I, Globals, UAcc);
+      UAcc = Acc{};
+    }
 
     ++Step;
   }
@@ -85,22 +80,27 @@ public:
       return;
     else {
       using BP = typename Traits::BackwardPass;
+      using Acc = typename BP::Accumulator;
+
+      size_t NumUnits = UnitAlloc.Size();
+      for (size_t I = 0; I < NumUnits; ++I)
+        UnitAlloc.template Get<BackwardAccTag>(I) = Acc{};
 
       for (size_t P = 0; P < ConnAlloc.Size(); ++P) {
         auto &Page = ConnAlloc.template Get<ConnPageMarker>(P);
-        float DstAct = PreviousActivation(Page.ToUnitIdx);
         for (size_t S = 0; S < Page.Count; ++S) {
-          auto [SrcId, Weight] = Page.Conn[S];
-          UnitAlloc.template Get<BackwardAccTag>(SrcId) +=
-              BP::Map(UnitAlloc, SrcId, Globals, Weight, DstAct);
+          auto &UAcc =
+              UnitAlloc.template Get<BackwardAccTag>(Page.Conn[S].first);
+          UAcc = BP::Combine(UAcc,
+                             BP::Map(UnitAlloc, Page.Conn[S].first,
+                                     Page.ToUnitIdx, ConnAlloc, P, S, Globals));
         }
       }
 
-      size_t NumUnits = UnitAlloc.Size();
       for (size_t I = 0; I < NumUnits; ++I) {
-        BP::CalculateAndApply(UnitAlloc, I, Globals,
-                              UnitAlloc.template Get<BackwardAccTag>(I));
-        UnitAlloc.template Get<BackwardAccTag>(I) = 0.0f;
+        auto &UAcc = UnitAlloc.template Get<BackwardAccTag>(I);
+        BP::Apply(UnitAlloc, I, Globals, UAcc);
+        UAcc = Acc{};
       }
     }
   }
@@ -222,9 +222,7 @@ public:
 
   std::span<const float> GetOutput() const {
     const float *Base =
-        Step % 2 == 0
-            ? &UnitAlloc.template Get<ActivationATag>(OutputRange.Begin)
-            : &UnitAlloc.template Get<ActivationBTag>(OutputRange.Begin);
+        &UnitAlloc.template Get<ActivationTag>(OutputRange.Begin);
     return {Base, OutputRange.Size()};
   }
 
@@ -232,18 +230,6 @@ public:
   auto &GetUnitAlloc() { return UnitAlloc; }
 
 private:
-  float &CurrentActivation(size_t Id) {
-    if (Step % 2 == 0)
-      return UnitAlloc.template Get<ActivationBTag>(Id);
-    return UnitAlloc.template Get<ActivationATag>(Id);
-  }
-
-  float &PreviousActivation(size_t Id) {
-    if (Step % 2 == 0)
-      return UnitAlloc.template Get<ActivationATag>(Id);
-    return UnitAlloc.template Get<ActivationBTag>(Id);
-  }
-
   size_t NumInput;
   size_t Step = 0;
   UnitRange OutputRange;
