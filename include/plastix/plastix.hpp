@@ -52,10 +52,6 @@ public:
     for (size_t I = 0; I < NumInput; ++I)
       UnitAlloc.template Get<ActivationTag>(I) = Inputs[I];
 
-    size_t NumUnits = UnitAlloc.Size();
-    for (size_t I = NumInput; I < NumUnits; ++I)
-      UnitAlloc.template Get<ForwardAccTag>(I) = Acc{};
-
     for (size_t P = 0; P < ConnAlloc.Size(); ++P) {
       auto &Page = ConnAlloc.template Get<ConnPageMarker>(P);
       auto &UAcc = UnitAlloc.template Get<ForwardAccTag>(Page.ToUnitIdx);
@@ -66,6 +62,7 @@ public:
       }
     }
 
+    size_t NumUnits = UnitAlloc.Size();
     for (size_t I = NumInput; I < NumUnits; ++I) {
       auto &UAcc = UnitAlloc.template Get<ForwardAccTag>(I);
       FP::Apply(UnitAlloc, I, Globals, UAcc);
@@ -82,10 +79,6 @@ public:
       using BP = typename Traits::BackwardPass;
       using Acc = typename BP::Accumulator;
 
-      size_t NumUnits = UnitAlloc.Size();
-      for (size_t I = 0; I < NumUnits; ++I)
-        UnitAlloc.template Get<BackwardAccTag>(I) = Acc{};
-
       for (size_t P = 0; P < ConnAlloc.Size(); ++P) {
         auto &Page = ConnAlloc.template Get<ConnPageMarker>(P);
         for (size_t S = 0; S < Page.Count; ++S) {
@@ -97,6 +90,7 @@ public:
         }
       }
 
+      size_t NumUnits = UnitAlloc.Size();
       for (size_t I = 0; I < NumUnits; ++I) {
         auto &UAcc = UnitAlloc.template Get<BackwardAccTag>(I);
         BP::Apply(UnitAlloc, I, Globals, UAcc);
