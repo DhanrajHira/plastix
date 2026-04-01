@@ -5,21 +5,30 @@
 
 namespace plastix {
 
-// Generates UnitState tags, UnitStateAllocator, and UnitStateHandle from the
-// field list in unit_state.inc by including soa.hpp once per mode.
-// See soa.hpp for a full explanation of the three-pass X-macro pattern.
+// Entity type and ID
+struct UnitState {};
+using UnitStateId = alloc::AllocId<UnitState>;
 
-#define PLASTIX_SOA_MODE_TAGS
-#include "plastix/soa.hpp"
-#include "unit_state.inc"
+// SOA field tags
+struct ActivationTag {};
+struct ForwardAccTag {};
+struct BackwardAccTag {};
+struct UpdateAccTag {};
+struct PrunedTag {};
 
-#define PLASTIX_SOA_MODE_ALLOC
-#include "plastix/soa.hpp"
-#include "unit_state.inc"
+// Unit allocator parameterized by accumulator types from policies.
+// FwdAcc, BwdAcc, UpdAcc are the Accumulator/Partial types from the
+// ForwardPass, BackwardPass, and UpdateUnit policies respectively.
+template <typename FwdAcc, typename BwdAcc, typename UpdAcc>
+using MakeUnitAllocator =
+    alloc::SOAAllocator<UnitState, alloc::SOAField<ActivationTag, float>,
+                        alloc::SOAField<ForwardAccTag, FwdAcc>,
+                        alloc::SOAField<BackwardAccTag, BwdAcc>,
+                        alloc::SOAField<UpdateAccTag, UpdAcc>,
+                        alloc::SOAField<PrunedTag, bool>>;
 
-#define PLASTIX_SOA_MODE_HANDLE
-#include "plastix/soa.hpp"
-#include "unit_state.inc"
+// Convenience alias for the default case (all float accumulators).
+using UnitStateAllocator = MakeUnitAllocator<float, float, float>;
 
 } // namespace plastix
 

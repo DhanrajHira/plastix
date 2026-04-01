@@ -1,10 +1,15 @@
 #ifndef PLASTIX_TRAITS_HPP
 #define PLASTIX_TRAITS_HPP
 
+#include "plastix/unit_state.hpp"
+
 #include <concepts>
 #include <cstddef>
 
 namespace plastix {
+
+// Forward declaration for use in default policies.
+struct ConnPageMarker;
 
 // ---------------------------------------------------------------------------
 // Policy concepts
@@ -22,15 +27,23 @@ namespace plastix {
 //     per-connection contribution, e.g. Weight * Activation. Results are
 //     accumulated into a running sum for that destination unit.
 //
-//   Phase 2 — CalculateAndApply: called once per destination unit after all
-//     its incoming Map results have been summed. Applies the activation
-//     function, stores any side-effects (e.g. error signals), and returns
-//     the value written into the activation buffer.
-template <typename P, typename UnitAlloc, typename Global>
+//   Phase 2 — Apply: called once per destination unit after all
+//     its incoming Map results have been combined. Applies the activation
+//     function, stores any side-effects (e.g. error signals).
+template <typename P, typename UnitAlloc, typename ConnAlloc, typename Global>
 concept PassPolicy =
-    requires(UnitAlloc &U, size_t Id, Global &G, float W, float A, float Acc) {
-      { P::Map(U, Id, G, W, A) } -> std::convertible_to<float>;
-      { P::CalculateAndApply(U, Id, G, Acc) } -> std::convertible_to<float>;
+    std::default_initializable<typename P::Accumulator> &&
+    requires(UnitAlloc &U, size_t A, size_t B, ConnAlloc &C, size_t PageId,
+             size_t SlotIdx, Global &G, typename P::Accumulator AccA,
+             typename P::Accumulator AccB) {
+      typename P::Accumulator;
+      {
+        P::Map(U, A, B, C, PageId, SlotIdx, G)
+      } -> std::convertible_to<typename P::Accumulator>;
+      {
+        P::Combine(AccA, AccB)
+      } -> std::convertible_to<typename P::Accumulator>;
+      { P::Apply(U, A, G, AccA) } -> std::same_as<void>;
     };
 
 // UpdateUnitPolicy uses a map-reduce pattern so that the per-unit update can
@@ -45,6 +58,7 @@ concept PassPolicy =
 // accumulators without knowing the concrete type.
 template <typename P, typename UnitAlloc, typename Global>
 concept UpdateUnitPolicy =
+    std::default_initializable<typename P::Partial> &&
     requires(UnitAlloc &U, size_t DstId, size_t SrcId, Global &G, float W,
              typename P::Partial A, typename P::Partial B) {
       typename P::Partial;
@@ -133,11 +147,15 @@ concept PruneConnPolicy =
 // DefaultForwardPass: weighted linear summation with identity activation
 // (i.e. no nonlinearity). Equivalent to a plain matrix-vector multiply.
 struct DefaultForwardPass {
-  static float Map(auto &, size_t, auto &, float Weight, float Activation) {
-    return Weight * Activation;
+  using Accumulator = float;
+  static float Map(auto &U, size_t, size_t SrcId, auto &C, size_t PageId,
+                   size_t SlotIdx, auto &) {
+    return C.template Get<ConnPageMarker>(PageId).GetSlot(SlotIdx).second *
+           U.template Get<ActivationTag>(SrcId);
   }
-  static float CalculateAndApply(auto &, size_t, auto &, float Accumulated) {
-    return Accumulated;
+  static float Combine(float A, float B) { return A + B; }
+  static void Apply(auto &U, size_t Id, auto &, float Accumulated) {
+    U.template Get<ActivationTag>(Id) = Accumulated;
   }
 };
 
@@ -145,8 +163,12 @@ struct DefaultForwardPass {
 // Do*() methods in Network compile out the entire loop body via if constexpr
 // when these exact types are detected. There is no runtime overhead.
 struct NoBackwardPass {
-  static float Map(auto &, size_t, auto &, float, float) { return 0.0f; }
-  static float CalculateAndApply(auto &, size_t, auto &, float) { return 0.0f; }
+  using Accumulator = float;
+  static float Map(auto &, size_t, size_t, auto &, size_t, size_t, auto &) {
+    return 0.0f;
+  }
+  static float Combine(float A, float B) { return A + B; }
+  static void Apply(auto &, size_t, auto &, float) {}
 };
 
 struct NoUpdateUnit {
@@ -212,10 +234,8 @@ struct EmptyGlobalState {};
 // SOA fields without modifying any framework files.
 // ---------------------------------------------------------------------------
 
-template <typename UnitAlloc, typename ConnAlloc,
-          typename Global = EmptyGlobalState>
+template <typename ConnAlloc, typename Global = EmptyGlobalState>
 struct DefaultNetworkTraits {
-  using UnitAllocator = UnitAlloc;
   using ConnAllocator = ConnAlloc;
   using GlobalState = Global;
   using ForwardPass = DefaultForwardPass;
@@ -237,7 +257,6 @@ struct DefaultNetworkTraits {
 template <typename T>
 concept NetworkTraits =
     requires {
-      typename T::UnitAllocator;
       typename T::ConnAllocator;
       typename T::GlobalState;
       typename T::ForwardPass;
@@ -249,21 +268,45 @@ concept NetworkTraits =
       typename T::PruneUnit;
       typename T::PruneConn;
     } &&
-    PassPolicy<typename T::ForwardPass, typename T::UnitAllocator,
-               typename T::GlobalState> &&
-    PassPolicy<typename T::BackwardPass, typename T::UnitAllocator,
-               typename T::GlobalState> &&
-    UpdateUnitPolicy<typename T::UpdateUnit, typename T::UnitAllocator,
+    PassPolicy<typename T::ForwardPass,
+               MakeUnitAllocator<typename T::ForwardPass::Accumulator,
+                                 typename T::BackwardPass::Accumulator,
+                                 typename T::UpdateUnit::Partial>,
+               typename T::ConnAllocator, typename T::GlobalState> &&
+    PassPolicy<typename T::BackwardPass,
+               MakeUnitAllocator<typename T::ForwardPass::Accumulator,
+                                 typename T::BackwardPass::Accumulator,
+                                 typename T::UpdateUnit::Partial>,
+               typename T::ConnAllocator, typename T::GlobalState> &&
+    UpdateUnitPolicy<typename T::UpdateUnit,
+                     MakeUnitAllocator<typename T::ForwardPass::Accumulator,
+                                       typename T::BackwardPass::Accumulator,
+                                       typename T::UpdateUnit::Partial>,
                      typename T::GlobalState> &&
-    AddUnitPolicy<typename T::AddUnit, typename T::UnitAllocator,
+    AddUnitPolicy<typename T::AddUnit,
+                  MakeUnitAllocator<typename T::ForwardPass::Accumulator,
+                                    typename T::BackwardPass::Accumulator,
+                                    typename T::UpdateUnit::Partial>,
                   typename T::GlobalState> &&
-    UpdateConnPolicy<typename T::UpdateConn, typename T::UnitAllocator,
+    UpdateConnPolicy<typename T::UpdateConn,
+                     MakeUnitAllocator<typename T::ForwardPass::Accumulator,
+                                       typename T::BackwardPass::Accumulator,
+                                       typename T::UpdateUnit::Partial>,
                      typename T::ConnAllocator, typename T::GlobalState> &&
-    AddConnPolicy<typename T::AddConn, typename T::UnitAllocator,
+    AddConnPolicy<typename T::AddConn,
+                  MakeUnitAllocator<typename T::ForwardPass::Accumulator,
+                                    typename T::BackwardPass::Accumulator,
+                                    typename T::UpdateUnit::Partial>,
                   typename T::ConnAllocator, typename T::GlobalState> &&
-    PruneUnitPolicy<typename T::PruneUnit, typename T::UnitAllocator,
+    PruneUnitPolicy<typename T::PruneUnit,
+                    MakeUnitAllocator<typename T::ForwardPass::Accumulator,
+                                      typename T::BackwardPass::Accumulator,
+                                      typename T::UpdateUnit::Partial>,
                     typename T::GlobalState> &&
-    PruneConnPolicy<typename T::PruneConn, typename T::UnitAllocator,
+    PruneConnPolicy<typename T::PruneConn,
+                    MakeUnitAllocator<typename T::ForwardPass::Accumulator,
+                                      typename T::BackwardPass::Accumulator,
+                                      typename T::UpdateUnit::Partial>,
                     typename T::ConnAllocator, typename T::GlobalState>;
 
 } // namespace plastix
