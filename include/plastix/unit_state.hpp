@@ -6,17 +6,28 @@
 
 namespace plastix {
 
-#define PLASTIX_SOA_MODE_TAGS
-#include "plastix/soa.hpp"
-#include "unit_state.inc"
+struct UnitState {};
+using UnitStateId = alloc::AllocId<UnitState>;
 
-#define PLASTIX_SOA_MODE_ALLOC
-#include "plastix/soa.hpp"
-#include "unit_state.inc"
+struct ActivationTag {};
+struct ForwardAccTag {};
+struct BackwardAccTag {};
+struct UpdateAccTag {};
+struct PrunedTag {};
+struct PositionTag {};
+struct LevelTag {};
 
-#define PLASTIX_SOA_MODE_HANDLE
-#include "plastix/soa.hpp"
-#include "unit_state.inc"
+template <typename FwdAcc, typename BwdAcc, typename UpdAcc>
+using MakeUnitAllocator =
+    alloc::SOAAllocator<UnitState, alloc::SOAField<ActivationTag, float>,
+                        alloc::SOAField<ForwardAccTag, FwdAcc>,
+                        alloc::SOAField<BackwardAccTag, BwdAcc>,
+                        alloc::SOAField<UpdateAccTag, UpdAcc>,
+                        alloc::SOAField<PrunedTag, bool>,
+                        alloc::SOAField<PositionTag, UnitPosition>,
+                        alloc::SOAField<LevelTag, uint16_t>>;
+
+using UnitStateAllocator = MakeUnitAllocator<float, float, float>;
 
 } // namespace plastix
 

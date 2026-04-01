@@ -8,8 +8,7 @@ TEST(PlastixTest, Version) { EXPECT_STREQ(plastix::version(), "0.1.0"); }
 
 namespace plastix_test {
 
-using TestTraits = plastix::DefaultNetworkTraits<plastix::UnitStateAllocator,
-                                                 plastix::ConnStateAllocator>;
+using TestTraits = plastix::DefaultNetworkTraits<plastix::ConnStateAllocator>;
 using TestNetwork = plastix::Network<TestTraits>;
 
 TEST(NetworkTest, ConnDefaultInitialization) {
@@ -65,17 +64,20 @@ TEST(NetworkTest, SingleLayerPerceptronManyConnections) {
 }
 
 struct ScaledForwardPass {
-  static float Map(auto &, size_t, auto &, float Weight, float Activation) {
-    return 2.0f * Weight * Activation;
+  using Accumulator = float;
+  static float Map(auto &U, size_t, size_t SrcId, auto &C, size_t ConnId,
+                   auto &) {
+    return 2.0f * C.template Get<plastix::WeightTag>(ConnId) *
+           U.template Get<plastix::ActivationTag>(SrcId);
   }
-  static float CalculateAndApply(auto &, size_t, auto &, float Accumulated) {
-    return std::tanh(Accumulated);
+  static float Combine(float A, float B) { return A + B; }
+  static void Apply(auto &U, size_t Id, auto &, float Accumulated) {
+    U.template Get<plastix::ActivationTag>(Id) = std::tanh(Accumulated);
   }
 };
 
 struct CustomForwardTraits
-    : plastix::DefaultNetworkTraits<plastix::UnitStateAllocator,
-                                    plastix::ConnStateAllocator> {
+    : plastix::DefaultNetworkTraits<plastix::ConnStateAllocator> {
   using ForwardPass = ScaledForwardPass;
 };
 
@@ -91,8 +93,7 @@ struct TestGlobalState {
 };
 
 struct CustomGlobalTraits
-    : plastix::DefaultNetworkTraits<plastix::UnitStateAllocator,
-                                    plastix::ConnStateAllocator,
+    : plastix::DefaultNetworkTraits<plastix::ConnStateAllocator,
                                     TestGlobalState> {};
 
 TEST(NetworkTraitsTest, CustomGlobalState) {
@@ -113,7 +114,7 @@ TEST(PassTest, StepCounter) {
   Net.DoForwardPass(In);
   EXPECT_EQ(Net.GetStep(), 1u);
 
-  // Backward does not increment step — it doesn't swap activation buffers.
+  // Backward does not increment step.
   Net.DoBackwardPass();
   EXPECT_EQ(Net.GetStep(), 1u);
 }
@@ -126,13 +127,12 @@ TEST(PassTest, ForwardPassIdentity) {
   Net.DoForwardPass(In);
 
   auto &UA = Net.GetUnitAlloc();
-  // Step 0 (even): inputs and output written to B (current).
-  float Out = UA.Get<plastix::ActivationBTag>(2);
+  float Out = UA.Get<plastix::ActivationTag>(2);
   EXPECT_FLOAT_EQ(Out, 8.0f);
 
-  // Inputs are in the current (B) buffer.
-  EXPECT_FLOAT_EQ(UA.Get<plastix::ActivationBTag>(0), 3.0f);
-  EXPECT_FLOAT_EQ(UA.Get<plastix::ActivationBTag>(1), 5.0f);
+  // Inputs written to Activation.
+  EXPECT_FLOAT_EQ(UA.Get<plastix::ActivationTag>(0), 3.0f);
+  EXPECT_FLOAT_EQ(UA.Get<plastix::ActivationTag>(1), 5.0f);
 }
 
 TEST(PassTest, ForwardPassCustomPolicy) {
@@ -144,7 +144,7 @@ TEST(PassTest, ForwardPassCustomPolicy) {
   Net.DoForwardPass(In);
 
   auto &UA = Net.GetUnitAlloc();
-  float Out = UA.Get<plastix::ActivationBTag>(2);
+  float Out = UA.Get<plastix::ActivationTag>(2);
   EXPECT_FLOAT_EQ(Out, std::tanh(6.0f));
 }
 
@@ -157,47 +157,47 @@ TEST(PassTest, ForwardPassManyConnections) {
   Net.DoForwardPass(In);
 
   auto &UA = Net.GetUnitAlloc();
-  float Out = UA.Get<plastix::ActivationBTag>(10);
+  float Out = UA.Get<plastix::ActivationTag>(10);
   EXPECT_FLOAT_EQ(Out, 10.0f);
 }
 
 TEST(PassTest, ConsecutiveForwardPasses) {
-  // Two forward passes with different inputs — verify buffer swap.
+  // Two forward passes with different inputs — second overwrites first.
   TestNetwork Net(2, 1);
 
-  // First pass (step 0, writes to B)
+  // First pass: output = 1+2 = 3
   std::array<float, 2> In1 = {1.0f, 2.0f};
   Net.DoForwardPass(In1);
   auto &UA = Net.GetUnitAlloc();
-  EXPECT_FLOAT_EQ(UA.Get<plastix::ActivationBTag>(2), 3.0f);
+  EXPECT_FLOAT_EQ(UA.Get<plastix::ActivationTag>(2), 3.0f);
 
-  // Second pass (step 1, writes to A).
+  // Second pass: output = 4+5 = 9.
   std::array<float, 2> In2 = {4.0f, 5.0f};
   Net.DoForwardPass(In2);
-  EXPECT_FLOAT_EQ(UA.Get<plastix::ActivationATag>(2), 9.0f);
-  // Inputs written to current (A).
-  EXPECT_FLOAT_EQ(UA.Get<plastix::ActivationATag>(0), 4.0f);
-  EXPECT_FLOAT_EQ(UA.Get<plastix::ActivationATag>(1), 5.0f);
-  // Previous output in B untouched by this pass.
-  EXPECT_FLOAT_EQ(UA.Get<plastix::ActivationBTag>(2), 3.0f);
+  EXPECT_FLOAT_EQ(UA.Get<plastix::ActivationTag>(2), 9.0f);
+  EXPECT_FLOAT_EQ(UA.Get<plastix::ActivationTag>(0), 4.0f);
+  EXPECT_FLOAT_EQ(UA.Get<plastix::ActivationTag>(1), 5.0f);
 }
 
 struct GradientBackwardPass {
-  static float Map(auto &, size_t, auto &, float Weight, float Activation) {
-    return Weight * Activation;
+  using Accumulator = float;
+  static float Map(auto &U, size_t, size_t ToId, auto &C, size_t ConnId,
+                   auto &) {
+    return C.template Get<plastix::WeightTag>(ConnId) *
+           U.template Get<plastix::ActivationTag>(ToId);
   }
-  static float CalculateAndApply(auto &, size_t, auto &, float) { return 0.0f; }
+  static float Combine(float A, float B) { return A + B; }
+  static void Apply(auto &, size_t, auto &, float) {}
 };
 
 struct GradientBackwardTraits
-    : plastix::DefaultNetworkTraits<plastix::UnitStateAllocator,
-                                    plastix::ConnStateAllocator> {
+    : plastix::DefaultNetworkTraits<plastix::ConnStateAllocator> {
   using BackwardPass = GradientBackwardPass;
 };
 
 TEST(PassTest, BackwardPassBasic) {
   // Forward: 2 inputs, 1 output. inputs={3,5}, output=8.
-  // Backward: reads output activation (8) from previous buffer,
+  // Backward: reads output activation (8) from Activation,
   // accumulates weight*8 into BackwardAcc for source units.
   plastix::Network<GradientBackwardTraits> Net(2, 1);
   std::array<float, 2> In = {3.0f, 5.0f};
@@ -205,21 +205,20 @@ TEST(PassTest, BackwardPassBasic) {
   EXPECT_EQ(Net.GetStep(), 1u);
 
   Net.DoBackwardPass();
-  // Step unchanged — backward doesn't swap buffers.
+  // Step unchanged — backward doesn't increment.
   EXPECT_EQ(Net.GetStep(), 1u);
 
   auto &UA = Net.GetUnitAlloc();
-  // BackwardAcc is reset to 0 after CalculateAndApply (same pattern as
-  // UpdateAcc), so the accumulated values are consumed and then cleared.
+  // BackwardAcc is reset to 0 after Apply, so the accumulated
+  // values are consumed and then cleared.
   EXPECT_FLOAT_EQ(UA.Get<plastix::BackwardAccTag>(0), 0.0f);
   EXPECT_FLOAT_EQ(UA.Get<plastix::BackwardAccTag>(1), 0.0f);
   EXPECT_FLOAT_EQ(UA.Get<plastix::BackwardAccTag>(2), 0.0f);
 
   // Activations are untouched by backward pass.
-  // All values in B (current at step 0).
-  EXPECT_FLOAT_EQ(UA.Get<plastix::ActivationBTag>(0), 3.0f);
-  EXPECT_FLOAT_EQ(UA.Get<plastix::ActivationBTag>(1), 5.0f);
-  EXPECT_FLOAT_EQ(UA.Get<plastix::ActivationBTag>(2), 8.0f);
+  EXPECT_FLOAT_EQ(UA.Get<plastix::ActivationTag>(0), 3.0f);
+  EXPECT_FLOAT_EQ(UA.Get<plastix::ActivationTag>(1), 5.0f);
+  EXPECT_FLOAT_EQ(UA.Get<plastix::ActivationTag>(2), 8.0f);
 }
 
 // ---------------------------------------------------------------------------
@@ -299,13 +298,12 @@ TEST(LayerBuilderTest, MultiLayerForwardPass) {
 
   auto &UA = Net.GetUnitAlloc();
 
-  // Step 0 (even): all values written to B (current).
   // Hidden = {1+1, 1+1} = {2, 2}. Output = 2+2 = 4.
   std::array<float, 2> In = {1.0f, 1.0f};
   Net.DoForwardPass(In);
-  EXPECT_FLOAT_EQ(UA.Get<plastix::ActivationBTag>(2), 2.0f);
-  EXPECT_FLOAT_EQ(UA.Get<plastix::ActivationBTag>(3), 2.0f);
-  EXPECT_FLOAT_EQ(UA.Get<plastix::ActivationBTag>(4), 4.0f);
+  EXPECT_FLOAT_EQ(UA.Get<plastix::ActivationTag>(2), 2.0f);
+  EXPECT_FLOAT_EQ(UA.Get<plastix::ActivationTag>(3), 2.0f);
+  EXPECT_FLOAT_EQ(UA.Get<plastix::ActivationTag>(4), 4.0f);
 }
 
 // ---------------------------------------------------------------------------
@@ -378,8 +376,7 @@ struct SumWeightsUpdateUnit {
 };
 
 struct UpdateUnitTraits
-    : plastix::DefaultNetworkTraits<plastix::UnitStateAllocator,
-                                    plastix::ConnStateAllocator> {
+    : plastix::DefaultNetworkTraits<plastix::ConnStateAllocator> {
   using UpdateUnit = SumWeightsUpdateUnit;
 };
 
@@ -428,8 +425,7 @@ struct WeightDecayUpdateConn {
 };
 
 struct UpdateConnTraits
-    : plastix::DefaultNetworkTraits<plastix::UnitStateAllocator,
-                                    plastix::ConnStateAllocator> {
+    : plastix::DefaultNetworkTraits<plastix::ConnStateAllocator> {
   using UpdateConn = WeightDecayUpdateConn;
 };
 
@@ -451,8 +447,7 @@ TEST(UpdateTest, UpdateConnStateWeightDecay) {
 // ---------------------------------------------------------------------------
 
 struct DoStepUpdateTraits
-    : plastix::DefaultNetworkTraits<plastix::UnitStateAllocator,
-                                    plastix::ConnStateAllocator> {
+    : plastix::DefaultNetworkTraits<plastix::ConnStateAllocator> {
   using UpdateUnit = SumWeightsUpdateUnit;
   using UpdateConn = WeightDecayUpdateConn;
 };
@@ -498,8 +493,7 @@ struct PruneUnitById {
 };
 
 struct PruneUnitTraits
-    : plastix::DefaultNetworkTraits<plastix::UnitStateAllocator,
-                                    plastix::ConnStateAllocator> {
+    : plastix::DefaultNetworkTraits<plastix::ConnStateAllocator> {
   using PruneUnit = PruneUnitById;
 };
 
@@ -546,8 +540,7 @@ struct PruneDestUnit {
 size_t PruneDestUnit::TargetId = 0;
 
 struct PruneDestTraits
-    : plastix::DefaultNetworkTraits<plastix::UnitStateAllocator,
-                                    plastix::ConnStateAllocator> {
+    : plastix::DefaultNetworkTraits<plastix::ConnStateAllocator> {
   using PruneUnit = PruneDestUnit;
 };
 
@@ -573,8 +566,7 @@ struct PruneSmallWeight {
 };
 
 struct PruneConnTraits
-    : plastix::DefaultNetworkTraits<plastix::UnitStateAllocator,
-                                    plastix::ConnStateAllocator> {
+    : plastix::DefaultNetworkTraits<plastix::ConnStateAllocator> {
   using PruneConn = PruneSmallWeight;
 };
 
@@ -690,6 +682,7 @@ TEST(PositionTest, MultiLayerXProgression) {
 
   // Hidden at X=1, Y=-1, 0, 1
   EXPECT_EQ(static_cast<float>(UA.Get<plastix::PositionTag>(2).X), 1.0f);
+  EXPECT_EQ(static_cast<float>(UA.Get<plastix::ActivationTag>(2)), 0.0f);
   EXPECT_EQ(static_cast<float>(UA.Get<plastix::PositionTag>(2).Y), -1.0f);
   EXPECT_EQ(static_cast<float>(UA.Get<plastix::PositionTag>(3).Y), 0.0f);
   EXPECT_EQ(static_cast<float>(UA.Get<plastix::PositionTag>(4).Y), 1.0f);
@@ -713,8 +706,7 @@ struct AddOneUnit {
 };
 
 struct AddUnitTraits
-    : plastix::DefaultNetworkTraits<plastix::UnitStateAllocator,
-                                    plastix::ConnStateAllocator> {
+    : plastix::DefaultNetworkTraits<plastix::ConnStateAllocator> {
   using AddUnit = AddOneUnit;
 };
 
@@ -764,13 +756,12 @@ TEST(AddUnitTest, DoesNotIterateNewlyAddedUnits) {
 }
 
 TEST(AddUnitTest, NewUnitDefaultActivation) {
-  // Newly added unit should have zero activations.
+  // Newly added unit should have zero activation.
   plastix::Network<AddUnitTraits> Net(2, 1);
   Net.DoAddUnits();
 
   auto &UA = Net.GetUnitAlloc();
-  EXPECT_FLOAT_EQ(UA.Get<plastix::ActivationATag>(3), 0.0f);
-  EXPECT_FLOAT_EQ(UA.Get<plastix::ActivationBTag>(3), 0.0f);
+  EXPECT_FLOAT_EQ(UA.Get<plastix::ActivationTag>(3), 0.0f);
   EXPECT_FALSE(UA.Get<plastix::PrunedTag>(3));
 }
 
@@ -793,8 +784,7 @@ struct AddOneIncoming {
 };
 
 struct AddIncomingTraits
-    : plastix::DefaultNetworkTraits<plastix::UnitStateAllocator,
-                                    plastix::ConnStateAllocator> {
+    : plastix::DefaultNetworkTraits<plastix::ConnStateAllocator> {
   using AddConn = AddOneIncoming;
 };
 
@@ -813,8 +803,7 @@ struct AddOneOutgoing {
 };
 
 struct AddOutgoingTraits
-    : plastix::DefaultNetworkTraits<plastix::UnitStateAllocator,
-                                    plastix::ConnStateAllocator> {
+    : plastix::DefaultNetworkTraits<plastix::ConnStateAllocator> {
   using AddConn = AddOneOutgoing;
 };
 
@@ -835,8 +824,7 @@ struct AddBothDirections {
 };
 
 struct AddBothTraits
-    : plastix::DefaultNetworkTraits<plastix::UnitStateAllocator,
-                                    plastix::ConnStateAllocator> {
+    : plastix::DefaultNetworkTraits<plastix::ConnStateAllocator> {
   using AddConn = AddBothDirections;
 };
 
@@ -926,8 +914,7 @@ struct AddConnToOutput {
 };
 
 struct AddConnToOutputTraits
-    : plastix::DefaultNetworkTraits<plastix::UnitStateAllocator,
-                                    plastix::ConnStateAllocator> {
+    : plastix::DefaultNetworkTraits<plastix::ConnStateAllocator> {
   using AddConn = AddConnToOutput;
 };
 

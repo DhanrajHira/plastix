@@ -29,7 +29,10 @@ struct LevelRange {
 };
 
 template <NetworkTraits Traits> class Network {
-  using UnitAllocator = typename Traits::UnitAllocator;
+  using UnitAllocator =
+      MakeUnitAllocator<typename Traits::ForwardPass::Accumulator,
+                        typename Traits::BackwardPass::Accumulator,
+                        typename Traits::UpdateUnit::Partial>;
   using ConnAllocator = typename Traits::ConnAllocator;
   using GlobalState = typename Traits::GlobalState;
 
@@ -61,13 +64,10 @@ public:
       SortConnectionsByLevel();
 
     using FP = typename Traits::ForwardPass;
+    using Acc = typename FP::Accumulator;
 
     for (size_t I = 0; I < NumInput; ++I)
-      CurrentActivation(I) = Inputs[I];
-
-    size_t NumUnits = UnitAlloc.Size();
-    for (size_t I = NumInput; I < NumUnits; ++I)
-      CurrentActivation(I) = 0.0f;
+      UnitAlloc.template Get<ActivationTag>(I) = Inputs[I];
 
     for (uint16_t L = 1; L <= NumLevels; ++L) {
       for (uint32_t C = Ranges[L - 1].Begin; C < Ranges[L - 1].End; ++C) {
@@ -75,15 +75,18 @@ public:
           continue;
         auto ToId = ConnAlloc.template Get<ToIdTag>(C);
         auto FromId = ConnAlloc.template Get<FromIdTag>(C);
-        auto Weight = ConnAlloc.template Get<WeightTag>(C);
-        CurrentActivation(ToId) += FP::Map(UnitAlloc, ToId, Globals, Weight,
-                                           CurrentActivation(FromId));
+        auto &UAcc = UnitAlloc.template Get<ForwardAccTag>(ToId);
+        UAcc = FP::Combine(
+            UAcc, FP::Map(UnitAlloc, ToId, FromId, ConnAlloc, C, Globals));
       }
 
+      size_t NumUnits = UnitAlloc.Size();
       for (size_t I = NumInput; I < NumUnits; ++I) {
-        if (UnitAlloc.template Get<LevelTag>(I) == L)
-          CurrentActivation(I) = FP::CalculateAndApply(UnitAlloc, I, Globals,
-                                                       CurrentActivation(I));
+        if (UnitAlloc.template Get<LevelTag>(I) == L) {
+          auto &UAcc = UnitAlloc.template Get<ForwardAccTag>(I);
+          FP::Apply(UnitAlloc, I, Globals, UAcc);
+          UAcc = Acc{};
+        }
       }
     }
 
@@ -95,25 +98,25 @@ public:
       return;
     else {
       using BP = typename Traits::BackwardPass;
+      using Acc = typename BP::Accumulator;
 
-      size_t NumUnits = UnitAlloc.Size();
       for (uint16_t L = NumLevels; L >= 1; --L) {
         for (uint32_t C = Ranges[L].Begin; C < Ranges[L].End; ++C) {
           if (ConnAlloc.template Get<DeadTag>(C))
             continue;
           auto ToId = ConnAlloc.template Get<ToIdTag>(C);
           auto FromId = ConnAlloc.template Get<FromIdTag>(C);
-          auto Weight = ConnAlloc.template Get<WeightTag>(C);
-          float DstAct = PreviousActivation(ToId);
-          UnitAlloc.template Get<BackwardAccTag>(FromId) +=
-              BP::Map(UnitAlloc, FromId, Globals, Weight, DstAct);
+          auto &UAcc = UnitAlloc.template Get<BackwardAccTag>(FromId);
+          UAcc = BP::Combine(
+              UAcc, BP::Map(UnitAlloc, FromId, ToId, ConnAlloc, C, Globals));
         }
 
+        size_t NumUnits = UnitAlloc.Size();
         for (size_t I = NumInput; I < NumUnits; ++I) {
           if (UnitAlloc.template Get<LevelTag>(I) == L) {
-            BP::CalculateAndApply(UnitAlloc, I, Globals,
-                                  UnitAlloc.template Get<BackwardAccTag>(I));
-            UnitAlloc.template Get<BackwardAccTag>(I) = 0.0f;
+            auto &UAcc = UnitAlloc.template Get<BackwardAccTag>(I);
+            BP::Apply(UnitAlloc, I, Globals, UAcc);
+            UAcc = Acc{};
           }
         }
       }
@@ -289,9 +292,7 @@ public:
 
   std::span<const float> GetOutput() const {
     const float *Base =
-        Step % 2 == 0
-            ? &UnitAlloc.template Get<ActivationATag>(OutputRange.Begin)
-            : &UnitAlloc.template Get<ActivationBTag>(OutputRange.Begin);
+        &UnitAlloc.template Get<ActivationTag>(OutputRange.Begin);
     return {Base, OutputRange.Size()};
   }
 
@@ -299,18 +300,6 @@ public:
   auto &GetUnitAlloc() { return UnitAlloc; }
 
 private:
-  float &CurrentActivation(size_t Id) {
-    if (Step % 2 == 0)
-      return UnitAlloc.template Get<ActivationBTag>(Id);
-    return UnitAlloc.template Get<ActivationATag>(Id);
-  }
-
-  float &PreviousActivation(size_t Id) {
-    if (Step % 2 == 0)
-      return UnitAlloc.template Get<ActivationATag>(Id);
-    return UnitAlloc.template Get<ActivationBTag>(Id);
-  }
-
   void RecomputeLevels() {
     size_t NumUnits = UnitAlloc.Size();
     for (size_t I = NumInput; I < NumUnits; ++I)
