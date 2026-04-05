@@ -107,6 +107,7 @@ public:
   };
 
   size_t Size() const { return Count.load(); }
+  size_t GetCapacity() const { return Capacity; }
 
   size_t *PermutationScratch() { return PermScratch; }
 

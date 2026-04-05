@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <cstring>
 #include <span>
+#include <sys/mman.h>
 #include <type_traits>
 
 namespace plastix {
@@ -42,6 +43,10 @@ public:
              (LayerBuilder<Builders, UnitAllocator, ConnAllocator> && ...))
   Network(size_t InputDim, Builders... Layers)
       : NumInput(InputDim), UnitAlloc(256), ConnAlloc(256) {
+    size_t UnitCap = UnitAlloc.GetCapacity();
+    KahnScratch = static_cast<uint32_t *>(mmap(
+        nullptr, (5 * UnitCap + 1) * sizeof(uint32_t), PROT_READ | PROT_WRITE,
+        MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0));
     for (size_t I = 0; I < InputDim; ++I) {
       auto Id = UnitAlloc.Allocate();
       float Y = static_cast<float>(I) - static_cast<float>(InputDim - 1) / 2.0f;
@@ -302,25 +307,77 @@ public:
 private:
   void RecomputeLevels() {
     size_t NumUnits = UnitAlloc.Size();
+    size_t NumConns = ConnAlloc.Size();
+
     for (size_t I = NumInput; I < NumUnits; ++I)
       UnitAlloc.template Get<LevelTag>(I) = 0;
 
-    for (uint16_t Iter = 0; Iter < MaxLevels; ++Iter) {
-      bool Changed = false;
-      for (size_t C = 0; C < ConnAlloc.Size(); ++C) {
-        if (ConnAlloc.template Get<DeadTag>(C))
-          continue;
-        auto From = ConnAlloc.template Get<FromIdTag>(C);
-        auto To = ConnAlloc.template Get<ToIdTag>(C);
-        uint16_t NewLevel = UnitAlloc.template Get<LevelTag>(From) + 1;
-        auto &ToLevel = UnitAlloc.template Get<LevelTag>(To);
-        if (NewLevel > ToLevel) {
-          ToLevel = NewLevel;
-          Changed = true;
+    if (NumConns == 0)
+      return;
+
+    // Carve KahnScratch into per-unit arrays
+    uint32_t *InDegree = KahnScratch;
+    uint32_t *OutOffset = KahnScratch + NumUnits;
+    uint32_t *WritePos = KahnScratch + 2 * NumUnits + 1;
+    uint32_t *Frontier = KahnScratch + 3 * NumUnits + 1;
+    uint32_t *NextFrontier = KahnScratch + 4 * NumUnits + 1;
+    memset(KahnScratch, 0, (5 * NumUnits + 1) * sizeof(uint32_t));
+
+    // Outgoing edge list reuses ConnAlloc's pre-allocated scratch
+    size_t *OutEdges = ConnAlloc.PermutationScratch();
+
+    // Count in-degree and out-degree per unit
+    for (size_t C = 0; C < NumConns; ++C) {
+      if (ConnAlloc.template Get<DeadTag>(C))
+        continue;
+      ++OutOffset[ConnAlloc.template Get<FromIdTag>(C)];
+      ++InDegree[ConnAlloc.template Get<ToIdTag>(C)];
+    }
+
+    // Prefix sum: convert out-degrees in OutOffset to cumulative offsets
+    uint32_t Sum = 0;
+    for (size_t I = 0; I < NumUnits; ++I) {
+      uint32_t Deg = OutOffset[I];
+      OutOffset[I] = Sum;
+      Sum += Deg;
+    }
+    OutOffset[NumUnits] = Sum;
+
+    // Scatter connections into OutEdges
+    memcpy(WritePos, OutOffset, NumUnits * sizeof(uint32_t));
+    for (size_t C = 0; C < NumConns; ++C) {
+      if (ConnAlloc.template Get<DeadTag>(C))
+        continue;
+      uint32_t From = ConnAlloc.template Get<FromIdTag>(C);
+      OutEdges[WritePos[From]++] = C;
+    }
+
+    // Initialize frontier with in-degree 0 units
+    uint32_t FrontierSize = 0;
+    for (size_t I = 0; I < NumUnits; ++I) {
+      if (InDegree[I] == 0)
+        Frontier[FrontierSize++] = static_cast<uint32_t>(I);
+    }
+
+    // Level-parallel Kahn's algorithm
+    uint16_t CurrentLevel = 0;
+    while (FrontierSize > 0) {
+      uint32_t NextSize = 0;
+      for (uint32_t F = 0; F < FrontierSize; ++F) {
+        uint32_t U = Frontier[F];
+        for (uint32_t E = OutOffset[U]; E < OutOffset[U + 1]; ++E) {
+          size_t C = OutEdges[E];
+          uint32_t To = ConnAlloc.template Get<ToIdTag>(C);
+          if (--InDegree[To] == 0) {
+            UnitAlloc.template Get<LevelTag>(To) =
+                static_cast<uint16_t>(CurrentLevel + 1);
+            NextFrontier[NextSize++] = To;
+          }
         }
       }
-      if (!Changed)
-        break;
+      ++CurrentLevel;
+      std::swap(Frontier, NextFrontier);
+      FrontierSize = NextSize;
     }
   }
 
@@ -376,6 +433,7 @@ private:
   std::array<LevelRange, MaxLevels> Ranges{};
   uint16_t NumLevels = 0;
   bool NeedsResort = false;
+  uint32_t *KahnScratch = nullptr;
 };
 
 } // namespace plastix
