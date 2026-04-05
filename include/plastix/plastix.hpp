@@ -10,7 +10,6 @@
 #include <cstdint>
 #include <cstring>
 #include <span>
-#include <sys/mman.h>
 #include <type_traits>
 
 namespace plastix {
@@ -29,6 +28,21 @@ struct LevelRange {
   uint32_t End;
 };
 
+struct InDegreeTag {};
+struct OutOffsetTag {};
+struct KahnWritePosTag {};
+struct FrontierTag {};
+struct NextFrontierTag {};
+struct KahnScratchEntity {};
+
+using KahnScratchAllocator =
+    alloc::SOAAllocator<KahnScratchEntity,
+                        alloc::SOAField<InDegreeTag, uint32_t>,
+                        alloc::SOAField<OutOffsetTag, uint32_t>,
+                        alloc::SOAField<KahnWritePosTag, uint32_t>,
+                        alloc::SOAField<FrontierTag, uint32_t>,
+                        alloc::SOAField<NextFrontierTag, uint32_t>>;
+
 template <NetworkTraits Traits> class Network {
   using UnitAllocator =
       MakeUnitAllocator<typename Traits::ForwardPass::Accumulator,
@@ -42,11 +56,8 @@ public:
     requires(sizeof...(Builders) > 0 &&
              (LayerBuilder<Builders, UnitAllocator, ConnAllocator> && ...))
   Network(size_t InputDim, Builders... Layers)
-      : NumInput(InputDim), UnitAlloc(256), ConnAlloc(256) {
-    size_t UnitCap = UnitAlloc.GetCapacity();
-    KahnScratch = static_cast<uint32_t *>(mmap(
-        nullptr, (5 * UnitCap + 1) * sizeof(uint32_t), PROT_READ | PROT_WRITE,
-        MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0));
+      : NumInput(InputDim), UnitAlloc(256), ConnAlloc(256),
+        KahnAlloc(UnitAlloc.GetCapacity() + 1) {
     for (size_t I = 0; I < InputDim; ++I) {
       auto Id = UnitAlloc.Allocate();
       float Y = static_cast<float>(I) - static_cast<float>(InputDim - 1) / 2.0f;
@@ -315,13 +326,13 @@ private:
     if (NumConns == 0)
       return;
 
-    // Carve KahnScratch into per-unit arrays
-    uint32_t *InDegree = KahnScratch;
-    uint32_t *OutOffset = KahnScratch + NumUnits;
-    uint32_t *WritePos = KahnScratch + 2 * NumUnits + 1;
-    uint32_t *Frontier = KahnScratch + 3 * NumUnits + 1;
-    uint32_t *NextFrontier = KahnScratch + 4 * NumUnits + 1;
-    memset(KahnScratch, 0, (5 * NumUnits + 1) * sizeof(uint32_t));
+    uint32_t *InDegree = KahnAlloc.template GetArrayFor<InDegreeTag>();
+    uint32_t *OutOffset = KahnAlloc.template GetArrayFor<OutOffsetTag>();
+    uint32_t *WritePos = KahnAlloc.template GetArrayFor<KahnWritePosTag>();
+    uint32_t *Frontier = KahnAlloc.template GetArrayFor<FrontierTag>();
+    uint32_t *NextFrontier = KahnAlloc.template GetArrayFor<NextFrontierTag>();
+    memset(InDegree, 0, NumUnits * sizeof(uint32_t));
+    memset(OutOffset, 0, (NumUnits + 1) * sizeof(uint32_t));
 
     // Outgoing edge list reuses ConnAlloc's pre-allocated scratch
     size_t *OutEdges = ConnAlloc.PermutationScratch();
@@ -352,12 +363,10 @@ private:
       OutEdges[WritePos[From]++] = C;
     }
 
-    // Initialize frontier with in-degree 0 units
-    uint32_t FrontierSize = 0;
-    for (size_t I = 0; I < NumUnits; ++I) {
-      if (InDegree[I] == 0)
-        Frontier[FrontierSize++] = static_cast<uint32_t>(I);
-    }
+    // Input units [0, NumInput) are always the level-0 frontier
+    for (size_t I = 0; I < NumInput; ++I)
+      Frontier[I] = static_cast<uint32_t>(I);
+    uint32_t FrontierSize = static_cast<uint32_t>(NumInput);
 
     // Level-parallel Kahn's algorithm
     uint16_t CurrentLevel = 0;
@@ -433,7 +442,7 @@ private:
   std::array<LevelRange, MaxLevels> Ranges{};
   uint16_t NumLevels = 0;
   bool NeedsResort = false;
-  uint32_t *KahnScratch = nullptr;
+  KahnScratchAllocator KahnAlloc;
 };
 
 } // namespace plastix

@@ -106,6 +106,16 @@ public:
     return std::get<0>(FieldPtrs)[Id];
   };
 
+  template <typename FieldTag> auto *GetArrayFor() {
+    constexpr auto Index = IndexOf<FieldTag>();
+    return std::get<Index>(FieldPtrs);
+  }
+
+  template <typename FieldTag> const auto *GetArrayFor() const {
+    constexpr auto Index = IndexOf<FieldTag>();
+    return std::get<Index>(FieldPtrs);
+  }
+
   size_t Size() const { return Count.load(); }
   size_t GetCapacity() const { return Capacity; }
 
