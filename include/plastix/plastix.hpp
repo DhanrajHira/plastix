@@ -30,10 +30,7 @@ const char *version();
 // ---------------------------------------------------------------------------
 
 template <NetworkTraits Traits> class Network {
-  using UnitAllocator =
-      MakeUnitAllocator<typename Traits::ForwardPass::Accumulator,
-                        typename Traits::BackwardPass::Accumulator,
-                        typename Traits::UpdateUnit::Partial>;
+  using UnitAllocator = UnitAllocFor<Traits>;
   using ConnAllocator = typename Traits::ConnAllocator;
   using GlobalState = typename Traits::GlobalState;
 
