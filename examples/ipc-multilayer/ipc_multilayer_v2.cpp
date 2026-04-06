@@ -1,9 +1,78 @@
 // ===========================================================================
-// Streaming iPC — Multi-Layer v1 ported to generalized-passes API
+// Streaming iPC — Multi-Layer Regression Example (v2)
 // ===========================================================================
-// This is a direct port of v1 logic to the new API. It keeps the same
-// ValueNodeTag/ErrorTag fields and pre-step sync block so we can verify
-// numerical equivalence with v2.
+//
+// This example implements Streaming incremental Predictive Coding (iPC)
+// using the generalized pass API on the dbhira-generalized-passes branch.
+//
+// Key improvements over v1:
+//   - No ping-pong buffer sync (the pre-step block is eliminated)
+//   - ActivationTag serves directly as the persistent value node x^(l)
+//   - A single extra field (ErrorTag) is added via ExtraUnitFields
+//   - Error is relayed through existing tags between passes
+//
+// ---------------------------------------------------------------------------
+// Algorithm overview
+// ---------------------------------------------------------------------------
+//
+// A predictive coding network has L+1 layers of value nodes x^(0)..x^(L)
+// connected by L weight matrices theta^(0)..theta^(L-1). The generative
+// (top-down) convention is:
+//
+//   Layer L  (top)    = input layer,  clamped to y_in
+//   Layer 0  (bottom) = output layer, clamped to y_target
+//   Layers 1..L-1     = hidden layers with *persistent* value nodes
+//
+// Each weight matrix theta^(l) predicts layer l from layer l+1:
+//
+//   prediction:  mu^(l)  = theta^(l) * f(x^(l+1))
+//   error:       eps^(l) = x^(l) - mu^(l)
+//
+// Per observation, the network runs T simultaneous iPC steps. Each step:
+//
+//   (a) Compute predictions and errors at all layers:
+//         mu^(l)  = theta^(l) * f(x^(l+1))
+//         eps^(l) = x^(l) - mu^(l)
+//
+//   (b) Update hidden value nodes (layers 1..L-1):
+//         x^(l) += gamma * ( -eps^(l)
+//                             + f'(x^(l)) . [theta^(l-1)^T * eps^(l-1)] )
+//
+//   (c) Update all weights with a local Hebbian rule:
+//         theta^(l) += alpha * eps^(l) * f(x^(l+1))^T
+//
+// Value nodes are *never reset* between observations (streaming variant).
+//
+// ---------------------------------------------------------------------------
+// Mapping to Plastix (v2 — generalized passes)
+// ---------------------------------------------------------------------------
+//
+// ActivationTag is the persistent value node x^(l). ErrorTag is an extra
+// per-unit field added via ExtraUnitFields to store eps^(l).
+//
+// Each iPC step maps to:
+//
+//   1. DoForwardPass  [iPCForwardPass]
+//        Map:     reads weight from ConnAlloc, reads f(x_src) from
+//                 ActivationTag(SrcId), returns weight * f(x_src)
+//        Combine: sum
+//        Apply:   mu = accumulated sum
+//                 eps = ActivationTag(Id) - mu
+//                 writes eps to ErrorTag(Id)
+//
+//   2. DoBackwardPass  [iPCBackwardPass]
+//        Map:     reads weight and ErrorTag(DstId), returns weight * eps
+//        Combine: sum
+//        Apply:   for hidden units: bottom_up = f'(x) * BackwardAcc
+//                 writes bottom_up to UpdateAccTag(Id)
+//
+//   3. DoUpdateConnectionState  [iPCUpdateConn]
+//        reads ErrorTag(DstId) and f(ActivationTag(SrcId))
+//        writes theta += alpha * eps * f(x_src)
+//
+//   4. Manual value-node update (hidden units only):
+//        ActivationTag(I) += gamma * (-eps + bottom_up)
+//        where eps from ErrorTag, bottom_up from UpdateAccTag.
 // ===========================================================================
 
 #include <plastix/plastix.hpp>
@@ -13,14 +82,13 @@
 #include <random>
 
 // ---------------------------------------------------------------------------
-// Extra per-unit fields (same as v1)
+// Extra per-unit field for prediction error
 // ---------------------------------------------------------------------------
 
-struct ValueNodeTag {};
 struct ErrorTag {};
 
 // ---------------------------------------------------------------------------
-// Topology & hyperparameters (identical to v1)
+// Topology & hyperparameters
 // ---------------------------------------------------------------------------
 
 constexpr size_t NumInputs = 3;
@@ -30,7 +98,7 @@ constexpr size_t HiddenBegin = NumInputs;
 constexpr size_t HiddenEnd = HiddenBegin + HiddenSize;
 constexpr size_t OutputBegin = HiddenEnd;
 constexpr size_t OutputEnd = OutputBegin + OutputSize;
-constexpr size_t NumLayers = 3;
+constexpr size_t NumLayers = 3; // input, hidden, output
 constexpr size_t StepsPerObs = 2 * NumLayers;
 
 constexpr float Alpha = 0.005f;
@@ -47,45 +115,37 @@ inline float ActDeriv(float X) {
 }
 
 // ---------------------------------------------------------------------------
-// iPC forward pass — same logic as v1:
-//   reads f(ValueNode) from ActivationTag (synced in pre-step),
-//   computes ε = ValueNode - μ, stores in ErrorTag
+// iPC forward pass: accumulate μ = Σ w · f(x_src), then ε = x - μ
 // ---------------------------------------------------------------------------
 
 struct iPCForwardPass {
   using Accumulator = float;
 
-  // v1 did: return Weight * Activation (source activation from ping-pong)
-  // New API: we read ActivationTag(SrcId) which holds f(x) from pre-step sync
   static float Map(auto &U, size_t, size_t SrcId, auto &C, size_t PageId,
                    size_t SlotIdx, auto &) {
     float W =
         C.template Get<plastix::ConnPageMarker>(PageId).GetSlot(SlotIdx).second;
-    float Activation = U.template Get<plastix::ActivationTag>(SrcId);
-    return W * Activation;
+    float X = U.template Get<plastix::ActivationTag>(SrcId);
+    float Fx = (SrcId < NumInputs) ? X : Act(X);
+    return W * Fx;
   }
 
   static float Combine(float A, float B) { return A + B; }
 
-  // v1 did: eps = ValueNode - Mu, store in ErrorTag, return eps
   static void Apply(auto &U, size_t Id, auto &, float Mu) {
-    float X = U.template Get<ValueNodeTag>(Id);
+    float X = U.template Get<plastix::ActivationTag>(Id);
     float Eps = X - Mu;
     U.template Get<ErrorTag>(Id) = Eps;
   }
 };
 
 // ---------------------------------------------------------------------------
-// iPC backward pass — same logic as v1:
-//   reads ErrorTag(DstId) as the "activation" at destination
+// iPC backward pass: accumulate θᵀε, then compute bottom-up signal
 // ---------------------------------------------------------------------------
 
 struct iPCBackwardPass {
   using Accumulator = float;
 
-  // v1 did: return Weight * DstError
-  // In v1, DstAct was PreviousActivation(DstId) which held eps after forward.
-  // Here we read ErrorTag(DstId) directly (same value).
   static float Map(auto &U, size_t, size_t DstId, auto &C, size_t PageId,
                    size_t SlotIdx, auto &) {
     float W =
@@ -96,10 +156,9 @@ struct iPCBackwardPass {
 
   static float Combine(float A, float B) { return A + B; }
 
-  // v1 did: for hidden units, bottom_up = f'(x) * BackwardAcc -> UpdateAccTag
   static void Apply(auto &U, size_t Id, auto &, float BackwardAcc) {
     if (Id >= HiddenBegin && Id < HiddenEnd) {
-      float X = U.template Get<ValueNodeTag>(Id);
+      float X = U.template Get<plastix::ActivationTag>(Id);
       float BottomUp = ActDeriv(X) * BackwardAcc;
       U.template Get<plastix::UpdateAccTag>(Id) = BottomUp;
     }
@@ -107,7 +166,7 @@ struct iPCBackwardPass {
 };
 
 // ---------------------------------------------------------------------------
-// iPC weight update — identical to v1
+// iPC weight update: θ += α · ε_dst · f(x_src)
 // ---------------------------------------------------------------------------
 
 struct iPCUpdateConn {
@@ -115,13 +174,33 @@ struct iPCUpdateConn {
                                        auto &C, size_t PageId, size_t SlotIdx,
                                        auto &) {
     float Eps = U.template Get<ErrorTag>(DstId);
-    float XSrc = U.template Get<ValueNodeTag>(SrcId);
-    float Fx = (SrcId < NumInputs) ? XSrc : Act(XSrc);
+    float X = U.template Get<plastix::ActivationTag>(SrcId);
+    float Fx = (SrcId < NumInputs) ? X : Act(X);
     auto &Page = C.template Get<plastix::ConnPageMarker>(PageId);
     Page.Conn[SlotIdx].second += Alpha * Eps * Fx;
   }
   static void UpdateOutgoingConnection(auto &, size_t, size_t, auto &, size_t,
                                        size_t, auto &) {}
+};
+
+// ---------------------------------------------------------------------------
+// iPC value-node update: x += γ · (-ε + bottom_up)
+// ---------------------------------------------------------------------------
+
+// Does not need the map and combine, so this ends up wasting some computation.
+// We could consider the update unit policy to only have access to the unit and not the connections.
+struct iPCUpdateUnit {
+  using Partial = float;
+  static float Map(auto &, size_t, size_t, auto &, float) { return 0.0f; }
+  static float Combine(float A, float B) { return A + B; }
+  static void Apply(auto &U, size_t Id, auto &, float) {
+    if (Id >= HiddenBegin && Id < HiddenEnd) {
+      float Eps = U.template Get<ErrorTag>(Id);
+      float BottomUp = U.template Get<plastix::UpdateAccTag>(Id);
+      U.template Get<plastix::ActivationTag>(Id) += Gamma * (-Eps + BottomUp);
+      U.template Get<plastix::UpdateAccTag>(Id) = 0.0f;
+    }
+  }
 };
 
 // ---------------------------------------------------------------------------
@@ -132,9 +211,9 @@ struct iPCTraits
     : plastix::DefaultNetworkTraits<plastix::ConnStateAllocator> {
   using ForwardPass = iPCForwardPass;
   using BackwardPass = iPCBackwardPass;
+  using UpdateUnit = iPCUpdateUnit;
   using UpdateConn = iPCUpdateConn;
   using ExtraUnitFields = plastix::UnitFieldList<
-      plastix::alloc::SOAField<ValueNodeTag, float>,
       plastix::alloc::SOAField<ErrorTag, float>>;
 };
 
@@ -142,23 +221,11 @@ using iPCNet = plastix::Network<iPCTraits>;
 using FC = plastix::FullyConnected;
 
 // ---------------------------------------------------------------------------
-// One iPC step — same as v1 including the pre-step sync
+// One iPC inference+learning step
 // ---------------------------------------------------------------------------
 
 void iPCStep(iPCNet &Net, std::span<const float> Input) {
-  auto &U = Net.GetUnitAlloc();
-  size_t NumUnits = U.Size();
-
-  // Pre-step: copy f(ValueNode) into ActivationTag for non-input units.
-  // (In v1 this wrote to the ping-pong buffer; now ActivationTag is the
-  //  single buffer that DoForwardPass reads via Map.)
-  for (size_t I = NumInputs; I < NumUnits; ++I) {
-    float X = U.Get<ValueNodeTag>(I);
-    float Fx = (I >= HiddenBegin && I < HiddenEnd) ? Act(X) : X;
-    U.Get<plastix::ActivationTag>(I) = Fx;
-  }
-
-  // Forward pass: computes ε = ValueNode - μ, stores in ErrorTag.
+  // Forward pass: computes ε = x - μ, stores in ErrorTag.
   Net.DoForwardPass(Input);
 
   // Backward pass: propagates errors, stores bottom-up signal in UpdateAccTag.
@@ -167,25 +234,19 @@ void iPCStep(iPCNet &Net, std::span<const float> Input) {
   // Weight update: θ += α · ε · f(x_src).
   Net.DoUpdateConnectionState();
 
-  // Value-node update for hidden units:
-  //   x += γ · (-ε + bottom_up)
-  for (size_t I = HiddenBegin; I < HiddenEnd; ++I) {
-    float Eps = U.Get<ErrorTag>(I);
-    float BottomUp = U.Get<plastix::UpdateAccTag>(I);
-    U.Get<ValueNodeTag>(I) += Gamma * (-Eps + BottomUp);
-    U.Get<plastix::UpdateAccTag>(I) = 0.0f;
-  }
+  // Value-node update for hidden units: x += γ · (-ε + bottom_up).
+  Net.DoUpdateUnitState();
 }
 
 // ---------------------------------------------------------------------------
 
 int main() {
-  std::cout << "Plastix iPC Multi-Layer Regression (v1 ported)" << std::endl;
-  std::cout << "================================================" << std::endl;
+  std::cout << "Plastix iPC Multi-Layer Regression (v2)" << std::endl;
+  std::cout << "========================================" << std::endl;
 
   iPCNet net(NumInputs, FC{HiddenSize, 0.0f}, FC{OutputSize, 0.0f});
 
-  // LeCun-uniform init (identical to v1)
+  // LeCun-uniform init: U(-sqrt(3/fan_in), sqrt(3/fan_in))
   std::mt19937 Rng(42);
   {
     float BoundHidden = std::sqrt(3.0f / NumInputs);
@@ -220,6 +281,7 @@ int main() {
   float Input[3] = {};
 
   for (size_t T = 0; T < TotalSteps; ++T) {
+    // Sample a new observation every StepsPerObs steps.
     if (T % StepsPerObs == 0) {
       float X1 = Dist(Rng), X2 = Dist(Rng), X3 = Dist(Rng);
       PrevY = Y;
@@ -228,17 +290,19 @@ int main() {
       Input[1] = X2;
       Input[2] = X3;
 
+      // Clamp output value node (input is clamped by DoForwardPass).
       auto &U = net.GetUnitAlloc();
-      for (size_t I = 0; I < NumInputs; ++I)
-        U.Get<ValueNodeTag>(I) = Input[I];
-      U.Get<ValueNodeTag>(OutputBegin) = Y;
+      U.Get<plastix::ActivationTag>(OutputBegin) = Y;
     }
 
+    // Run one iPC step.
     iPCStep(net, Input);
 
+    // Compute prediction every step: μ = x - ε.
     auto &U = net.GetUnitAlloc();
-    float Pred = U.Get<ValueNodeTag>(OutputBegin) -
-                 U.Get<ErrorTag>(OutputBegin);
+    float X = U.Get<plastix::ActivationTag>(OutputBegin);
+    float Eps = U.Get<ErrorTag>(OutputBegin);
+    float Pred = X - Eps;
     float Loss = (Pred - Y) * (Pred - Y);
     float BaselineLoss = (PrevY - Y) * (PrevY - Y);
     AvgLoss += Loss;
@@ -260,6 +324,7 @@ int main() {
   std::cout << "\nFinal window  iPC: " << LastAvgLoss
             << "  baseline: " << LastAvgBaseline << std::endl;
 
+  // Print learned weights grouped by destination unit.
   auto &CA = net.GetConnAlloc();
   std::cout << "\nInput -> Hidden weights (theta^1):";
   for (size_t P = 0; P < CA.Size(); ++P) {
