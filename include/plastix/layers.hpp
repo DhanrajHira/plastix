@@ -20,9 +20,19 @@ concept LayerBuilder = requires(B Builder, UA &U, CA &C, UnitRange R) {
   { Builder(U, C, R) } -> std::same_as<UnitRange>;
 };
 
+struct NoUnitInit {
+  void operator()(auto &, auto) const {}
+};
+
+struct NoConnInit {
+  void operator()(auto &, auto) const {}
+};
+
+template <typename UnitInit = NoUnitInit, typename ConnInit = NoConnInit>
 struct FullyConnected {
   size_t NumUnits;
-  float InitWeight = 1.0f;
+  UnitInit InitUnit = {};
+  ConnInit InitConn = {};
 
   template <typename UnitAlloc, typename ConnAlloc>
   UnitRange operator()(UnitAlloc &UA, ConnAlloc &CA,
@@ -40,6 +50,7 @@ struct FullyConnected {
                                           static_cast<_Float16>(Y), _Float16{0},
                                           0};
       UA.template Get<LevelTag>(Id) = NewLevel;
+      InitUnit(UA, Id);
     }
 
     uint16_t SrcLevel = UA.template Get<LevelTag>(PrevLayer.Begin);
@@ -48,8 +59,8 @@ struct FullyConnected {
         auto ConnId = CA.Allocate();
         CA.template Get<ToIdTag>(ConnId) = static_cast<uint32_t>(U);
         CA.template Get<FromIdTag>(ConnId) = static_cast<uint32_t>(Src);
-        CA.template Get<WeightTag>(ConnId) = InitWeight;
         CA.template Get<SrcLevelTag>(ConnId) = SrcLevel;
+        InitConn(CA, ConnId);
       }
     }
     return {Begin, Begin + NumUnits};

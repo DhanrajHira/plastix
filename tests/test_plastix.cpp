@@ -11,6 +11,13 @@ namespace plastix_test {
 using TestTraits = plastix::DefaultNetworkTraits<plastix::ConnStateAllocator>;
 using TestNetwork = plastix::Network<TestTraits>;
 
+struct WeightOneInit {
+  void operator()(auto &CA, auto Id) const {
+    CA.template Get<plastix::WeightTag>(Id) = 1.0f;
+  }
+};
+using FC = plastix::FullyConnected<plastix::NoUnitInit, WeightOneInit>;
+
 TEST(NetworkTest, ConnDefaultInitialization) {
   plastix::ConnStateAllocator Alloc(4);
   auto Id = Alloc.Allocate();
@@ -24,7 +31,7 @@ TEST(NetworkTest, ConnDefaultInitialization) {
 TEST(NetworkTest, SingleLayerPerceptronConnections) {
   constexpr size_t InputDim = 3;
   constexpr size_t OutputDim = 2;
-  TestNetwork Net(InputDim, OutputDim);
+  TestNetwork Net(InputDim, FC{OutputDim});
 
   auto &ConnAlloc = Net.GetConnAlloc();
   auto &UnitAlloc = Net.GetUnitAlloc();
@@ -49,7 +56,7 @@ TEST(NetworkTest, SingleLayerPerceptronConnections) {
 TEST(NetworkTest, SingleLayerPerceptronManyConnections) {
   constexpr size_t InputDim = 10;
   constexpr size_t OutputDim = 1;
-  TestNetwork Net(InputDim, OutputDim);
+  TestNetwork Net(InputDim, FC{OutputDim});
 
   auto &ConnAlloc = Net.GetConnAlloc();
 
@@ -120,9 +127,9 @@ TEST(PassTest, StepCounter) {
 }
 
 TEST(PassTest, ForwardPassIdentity) {
-  // 2 inputs, 1 output, default weights=1.0
+  // 2 inputs, 1 output, weights=1.0
   // Output = sum of inputs = 3.0 + 5.0 = 8.0
-  TestNetwork Net(2, 1);
+  TestNetwork Net(2, FC{1});
   std::array<float, 2> In = {3.0f, 5.0f};
   Net.DoForwardPass(In);
 
@@ -139,7 +146,7 @@ TEST(PassTest, ForwardPassCustomPolicy) {
   // ScaledForwardPass: Map = 2 * W * A, Apply = tanh(Acc)
   // 2 inputs with weights=1.0, inputs={1.0, 2.0}
   // Acc = 2*1*1 + 2*1*2 = 6.0, output = tanh(6.0)
-  plastix::Network<CustomForwardTraits> Net(2, 1);
+  plastix::Network<CustomForwardTraits> Net(2, FC{1});
   std::array<float, 2> In = {1.0f, 2.0f};
   Net.DoForwardPass(In);
 
@@ -151,7 +158,7 @@ TEST(PassTest, ForwardPassCustomPolicy) {
 TEST(PassTest, ForwardPassManyConnections) {
   // 10 inputs (each=1.0), 1 output — 10 individual connections
   // Output = sum of 10 * 1.0 = 10.0
-  TestNetwork Net(10, 1);
+  TestNetwork Net(10, FC{1});
   std::array<float, 10> In;
   In.fill(1.0f);
   Net.DoForwardPass(In);
@@ -163,7 +170,7 @@ TEST(PassTest, ForwardPassManyConnections) {
 
 TEST(PassTest, ConsecutiveForwardPasses) {
   // Two forward passes with different inputs — second overwrites first.
-  TestNetwork Net(2, 1);
+  TestNetwork Net(2, FC{1});
 
   // First pass: output = 1+2 = 3
   std::array<float, 2> In1 = {1.0f, 2.0f};
@@ -199,7 +206,7 @@ TEST(PassTest, BackwardPassBasic) {
   // Forward: 2 inputs, 1 output. inputs={3,5}, output=8.
   // Backward: reads output activation (8) from Activation,
   // accumulates weight*8 into BackwardAcc for source units.
-  plastix::Network<GradientBackwardTraits> Net(2, 1);
+  plastix::Network<GradientBackwardTraits> Net(2, FC{1});
   std::array<float, 2> In = {3.0f, 5.0f};
   Net.DoForwardPass(In);
   EXPECT_EQ(Net.GetStep(), 1u);
@@ -224,8 +231,6 @@ TEST(PassTest, BackwardPassBasic) {
 // ---------------------------------------------------------------------------
 // Layer builder tests
 // ---------------------------------------------------------------------------
-
-using FC = plastix::FullyConnected;
 
 TEST(LayerBuilderTest, MultiLayerBuilder) {
   // 3 inputs -> 5 hidden -> 1 output = 9 units
@@ -273,8 +278,15 @@ TEST(LayerBuilderTest, MultiLayerManyConnections) {
   EXPECT_EQ(CA.Size(), 22u);
 }
 
-TEST(LayerBuilderTest, CustomInitWeight) {
-  TestNetwork Net(2, FC{1, 0.5f});
+struct HalfWeightInit {
+  void operator()(auto &CA, auto Id) const {
+    CA.template Get<plastix::WeightTag>(Id) = 0.5f;
+  }
+};
+
+TEST(LayerBuilderTest, CustomConnInit) {
+  using HalfFC = plastix::FullyConnected<plastix::NoUnitInit, HalfWeightInit>;
+  TestNetwork Net(2, HalfFC{1});
 
   auto &CA = Net.GetConnAlloc();
   EXPECT_EQ(CA.Size(), 2u);
@@ -312,7 +324,7 @@ TEST(LayerBuilderTest, MultiLayerForwardPass) {
 
 TEST(OutputTest, SingleLayerGetOutput) {
   // 2 inputs, 1 output. Output = 3+5 = 8.
-  TestNetwork Net(2, 1);
+  TestNetwork Net(2, FC{1});
   std::array<float, 2> In = {3.0f, 5.0f};
   Net.DoForwardPass(In);
 
@@ -323,7 +335,7 @@ TEST(OutputTest, SingleLayerGetOutput) {
 
 TEST(OutputTest, MultipleOutputUnits) {
   // 3 inputs, 2 outputs. Each output = sum of inputs = 1+2+3 = 6.
-  TestNetwork Net(3, 2);
+  TestNetwork Net(3, FC{2});
   std::array<float, 3> In = {1.0f, 2.0f, 3.0f};
   Net.DoForwardPass(In);
 
@@ -353,7 +365,7 @@ TEST(OutputTest, GetOutputIsConst) {
 
 TEST(OutputTest, DoStepGetOutput) {
   // Verify GetOutput works after DoStep (full pipeline).
-  TestNetwork Net(2, 1);
+  TestNetwork Net(2, FC{1});
   std::array<float, 2> In = {2.0f, 3.0f};
   Net.DoStep(In);
 
@@ -382,7 +394,7 @@ struct UpdateUnitTraits
 TEST(UpdateTest, UpdateUnitState) {
   // 2 inputs, 1 output, weights=1.0.
   // Update copies Activation into BackwardAcc for every unit.
-  plastix::Network<UpdateUnitTraits> Net(2, 1);
+  plastix::Network<UpdateUnitTraits> Net(2, FC{1});
   std::array<float, 2> In = {3.0f, 4.0f};
   Net.DoForwardPass(In);
   Net.DoUpdateUnitState();
@@ -415,7 +427,7 @@ struct UpdateConnTraits
 TEST(UpdateTest, UpdateConnStateWeightDecay) {
   // 2 inputs, 1 output, weights=1.0.
   // UpdateIncomingConnection halves weight => all weights become 0.5.
-  plastix::Network<UpdateConnTraits> Net(2, 1);
+  plastix::Network<UpdateConnTraits> Net(2, FC{1});
   std::array<float, 2> In = {1.0f, 1.0f};
   Net.DoForwardPass(In);
   Net.DoUpdateConnectionState();
@@ -438,7 +450,7 @@ struct DoStepUpdateTraits
 TEST(UpdateTest, DoStepWithUpdate) {
   // Full pipeline: forward + update unit + update conn.
   // After DoStep: BackwardAcc copies activation, weights halved to 0.5.
-  plastix::Network<DoStepUpdateTraits> Net(2, 1);
+  plastix::Network<DoStepUpdateTraits> Net(2, FC{1});
   std::array<float, 2> In = {3.0f, 4.0f};
   Net.DoStep(In);
 
@@ -656,7 +668,6 @@ TEST(PositionTest, FCLayerCenteredY) {
 TEST(PositionTest, MultiLayerXProgression) {
   // 2 inputs -> 3 hidden -> 1 output.
   // Inputs at X=0, hidden at X=1, output at X=2.
-  using FC = plastix::FullyConnected;
   TestNetwork Net(2, FC{3}, FC{1});
   auto &UA = Net.GetUnitAlloc();
 
@@ -905,7 +916,7 @@ struct AddConnToOutputTraits
 TEST(AddConnTest, NewConnectionParticipatesInForwardPass) {
   // 2 inputs (0,1), 1 output (2). Initial: 0→2 (w=1), 1→2 (w=1).
   // inputs={2, 3} => output = 1*2 + 1*3 = 5.
-  plastix::Network<AddConnToOutputTraits> Net(2, 1);
+  plastix::Network<AddConnToOutputTraits> Net(2, FC{1});
   std::array<float, 2> In = {2.0f, 3.0f};
   Net.DoForwardPass(In);
   EXPECT_FLOAT_EQ(Net.GetOutput()[0], 5.0f);
@@ -971,7 +982,7 @@ TEST(LevelTest, ThreeLayerSinglePassPropagation) {
 TEST(LevelTest, AddConnectionTriggersResort) {
   // After DoAddConnections, a subsequent DoForwardPass should see the new
   // connection (which requires re-sorting).
-  plastix::Network<AddConnToOutputTraits> Net(2, 1);
+  plastix::Network<AddConnToOutputTraits> Net(2, FC{1});
   std::array<float, 2> In = {2.0f, 3.0f};
 
   Net.DoForwardPass(In);

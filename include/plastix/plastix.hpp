@@ -83,7 +83,7 @@ public:
 
   // Convenience constructor for single-layer (input → output) networks.
   Network(size_t InputDim, size_t OutputDim = 1)
-      : Network(InputDim, FullyConnected{OutputDim}) {}
+      : Network(InputDim, FullyConnected<>{OutputDim}) {}
 
   size_t GetStep() const { return Step; }
 
