@@ -172,11 +172,18 @@ struct DefaultNetworkTraits {
   using PruneConn = NoPruneConn;
   using AddUnit = NoAddUnit;
   using AddConn = NoAddConn;
+  using ExtraUnitFields = UnitFieldList<>;
 };
 
 // ---------------------------------------------------------------------------
 // NetworkTraits concept — validates that all policies satisfy their concepts
 // ---------------------------------------------------------------------------
+
+// Helper: resolve the unit allocator for a given traits type.
+template <typename T>
+using UnitAllocFor = MakeUnitAllocatorFrom<
+    typename T::ForwardPass::Accumulator, typename T::BackwardPass::Accumulator,
+    typename T::UpdateUnit::Partial, typename T::ExtraUnitFields>;
 
 template <typename T>
 concept NetworkTraits =
@@ -194,46 +201,23 @@ concept NetworkTraits =
       typename T::PruneConn;
       typename T::AddUnit;
       typename T::AddConn;
+      typename T::ExtraUnitFields;
     } &&
-    PassPolicy<typename T::ForwardPass,
-               MakeUnitAllocator<typename T::ForwardPass::Accumulator,
-                                 typename T::BackwardPass::Accumulator,
-                                 typename T::UpdateUnit::Partial>,
+    PassPolicy<typename T::ForwardPass, UnitAllocFor<T>,
                typename T::ConnAllocator, typename T::GlobalState> &&
-    PassPolicy<typename T::BackwardPass,
-               MakeUnitAllocator<typename T::ForwardPass::Accumulator,
-                                 typename T::BackwardPass::Accumulator,
-                                 typename T::UpdateUnit::Partial>,
+    PassPolicy<typename T::BackwardPass, UnitAllocFor<T>,
                typename T::ConnAllocator, typename T::GlobalState> &&
-    UpdateUnitPolicy<typename T::UpdateUnit,
-                     MakeUnitAllocator<typename T::ForwardPass::Accumulator,
-                                       typename T::BackwardPass::Accumulator,
-                                       typename T::UpdateUnit::Partial>,
+    UpdateUnitPolicy<typename T::UpdateUnit, UnitAllocFor<T>,
                      typename T::GlobalState> &&
-    UpdateConnPolicy<typename T::UpdateConn,
-                     MakeUnitAllocator<typename T::ForwardPass::Accumulator,
-                                       typename T::BackwardPass::Accumulator,
-                                       typename T::UpdateUnit::Partial>,
+    UpdateConnPolicy<typename T::UpdateConn, UnitAllocFor<T>,
                      typename T::ConnAllocator, typename T::GlobalState> &&
-    PruneUnitPolicy<typename T::PruneUnit,
-                    MakeUnitAllocator<typename T::ForwardPass::Accumulator,
-                                      typename T::BackwardPass::Accumulator,
-                                      typename T::UpdateUnit::Partial>,
+    PruneUnitPolicy<typename T::PruneUnit, UnitAllocFor<T>,
                     typename T::GlobalState> &&
-    PruneConnPolicy<typename T::PruneConn,
-                    MakeUnitAllocator<typename T::ForwardPass::Accumulator,
-                                      typename T::BackwardPass::Accumulator,
-                                      typename T::UpdateUnit::Partial>,
+    PruneConnPolicy<typename T::PruneConn, UnitAllocFor<T>,
                     typename T::ConnAllocator, typename T::GlobalState> &&
-    AddUnitPolicy<typename T::AddUnit,
-                  MakeUnitAllocator<typename T::ForwardPass::Accumulator,
-                                    typename T::BackwardPass::Accumulator,
-                                    typename T::UpdateUnit::Partial>,
+    AddUnitPolicy<typename T::AddUnit, UnitAllocFor<T>,
                   typename T::GlobalState> &&
-    AddConnPolicy<typename T::AddConn,
-                  MakeUnitAllocator<typename T::ForwardPass::Accumulator,
-                                    typename T::BackwardPass::Accumulator,
-                                    typename T::UpdateUnit::Partial>,
+    AddConnPolicy<typename T::AddConn, UnitAllocFor<T>,
                   typename T::GlobalState>;
 
 } // namespace plastix
