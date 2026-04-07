@@ -141,25 +141,7 @@ public:
       return;
     else {
       using UP = typename Traits::UpdateUnit;
-      using Partial = typename UP::Partial;
-
-      for (size_t C = 0; C < ConnAlloc.Size(); ++C) {
-        if (ConnAlloc.template Get<DeadTag>(C))
-          continue;
-        auto ToId = ConnAlloc.template Get<ToIdTag>(C);
-        auto FromId = ConnAlloc.template Get<FromIdTag>(C);
-        auto Weight = ConnAlloc.template Get<WeightTag>(C);
-        auto &Acc = UnitAlloc.template Get<UpdateAccTag>(ToId);
-        Acc =
-            UP::Combine(Acc, UP::Map(UnitAlloc, ToId, FromId, Globals, Weight));
-      }
-
-      size_t NumUnits = UnitAlloc.Size();
-      for (size_t I = 0; I < NumUnits; ++I) {
-        auto &Acc = UnitAlloc.template Get<UpdateAccTag>(I);
-        UP::Apply(UnitAlloc, I, Globals, Acc);
-        Acc = Partial{};
-      }
+      UP::Update(UnitAlloc, Globals);
     }
   }
 

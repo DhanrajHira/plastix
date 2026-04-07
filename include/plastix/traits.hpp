@@ -30,17 +30,9 @@ concept PassPolicy =
     };
 
 template <typename P, typename UnitAlloc, typename Global>
-concept UpdateUnitPolicy =
-    std::default_initializable<typename P::Partial> &&
-    requires(UnitAlloc &U, size_t DstId, size_t SrcId, Global &G, float W,
-             typename P::Partial A, typename P::Partial B) {
-      typename P::Partial;
-      {
-        P::Map(U, DstId, SrcId, G, W)
-      } -> std::convertible_to<typename P::Partial>;
-      { P::Combine(A, B) } -> std::convertible_to<typename P::Partial>;
-      { P::Apply(U, DstId, G, A) } -> std::same_as<void>;
-    };
+concept UpdateUnitPolicy = requires(UnitAlloc &U, Global &G) {
+  { P::Update(U, G) } -> std::same_as<void>;
+};
 
 template <typename P, typename UnitAlloc, typename ConnAlloc, typename Global>
 concept UpdateConnPolicy = requires(UnitAlloc &U, size_t DstId, size_t SrcId,
@@ -116,10 +108,7 @@ struct NoBackwardPass {
 };
 
 struct NoUpdateUnit {
-  using Partial = float;
-  static Partial Map(auto &, size_t, size_t, auto &, float) { return 0.0f; }
-  static Partial Combine(Partial A, Partial B) { return A + B; }
-  static void Apply(auto &, size_t, auto &, Partial) {}
+  static void Update(auto &, auto &) {}
 };
 
 struct NoUpdateConn {
@@ -181,9 +170,10 @@ struct DefaultNetworkTraits {
 
 // Helper: resolve the unit allocator for a given traits type.
 template <typename T>
-using UnitAllocFor = MakeUnitAllocatorFrom<
-    typename T::ForwardPass::Accumulator, typename T::BackwardPass::Accumulator,
-    typename T::UpdateUnit::Partial, typename T::ExtraUnitFields>;
+using UnitAllocFor =
+    MakeUnitAllocatorFrom<typename T::ForwardPass::Accumulator,
+                          typename T::BackwardPass::Accumulator,
+                          typename T::ExtraUnitFields>;
 
 template <typename T>
 concept NetworkTraits =
@@ -195,7 +185,6 @@ concept NetworkTraits =
       typename T::BackwardPass;
       typename T::BackwardPass::Accumulator;
       typename T::UpdateUnit;
-      typename T::UpdateUnit::Partial;
       typename T::UpdateConn;
       typename T::PruneUnit;
       typename T::PruneConn;
