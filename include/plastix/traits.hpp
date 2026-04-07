@@ -63,20 +63,19 @@ concept AddUnitPolicy = requires(UnitAlloc &U, size_t Id, Global &G) {
   { P::AddUnit(U, Id, G) } -> std::convertible_to<UnitPosition>;
 };
 
-struct AddConnResult {
-  bool ShouldAdd;
-  float Weight;
-};
-
-template <typename P, typename UnitAlloc, typename Global>
+template <typename P, typename UnitAlloc, typename ConnAlloc, typename Global>
 concept AddConnPolicy =
-    requires(UnitAlloc &U, size_t SelfId, size_t CandidateId, Global &G) {
+    requires(UnitAlloc &U, size_t SelfId, size_t CandidateId, ConnAlloc &C,
+             size_t ConnId, Global &G) {
       {
         P::ShouldAddIncomingConnection(U, SelfId, CandidateId, G)
-      } -> std::convertible_to<AddConnResult>;
+      } -> std::convertible_to<bool>;
       {
         P::ShouldAddOutgoingConnection(U, SelfId, CandidateId, G)
-      } -> std::convertible_to<AddConnResult>;
+      } -> std::convertible_to<bool>;
+      {
+        P::InitConnection(U, SelfId, CandidateId, C, ConnId, G)
+      } -> std::same_as<void>;
     };
 
 // ---------------------------------------------------------------------------
@@ -133,14 +132,13 @@ struct NoAddUnit {
 };
 
 struct NoAddConn {
-  static AddConnResult ShouldAddIncomingConnection(auto &, size_t, size_t,
-                                                   auto &) {
-    return {false, 0.0f};
+  static bool ShouldAddIncomingConnection(auto &, size_t, size_t, auto &) {
+    return false;
   }
-  static AddConnResult ShouldAddOutgoingConnection(auto &, size_t, size_t,
-                                                   auto &) {
-    return {false, 0.0f};
+  static bool ShouldAddOutgoingConnection(auto &, size_t, size_t, auto &) {
+    return false;
   }
+  static void InitConnection(auto &, size_t, size_t, auto &, size_t, auto &) {}
 };
 
 struct EmptyGlobalState {};
@@ -149,9 +147,7 @@ struct EmptyGlobalState {};
 // Default traits base — inherit and override individual policies as needed
 // ---------------------------------------------------------------------------
 
-template <typename ConnAlloc, typename Global = EmptyGlobalState>
-struct DefaultNetworkTraits {
-  using ConnAllocator = ConnAlloc;
+template <typename Global = EmptyGlobalState> struct DefaultNetworkTraits {
   using GlobalState = Global;
   using ForwardPass = DefaultForwardPass;
   using BackwardPass = NoBackwardPass;
@@ -162,6 +158,7 @@ struct DefaultNetworkTraits {
   using AddUnit = NoAddUnit;
   using AddConn = NoAddConn;
   using ExtraUnitFields = UnitFieldList<>;
+  using ExtraConnFields = ConnFieldList<alloc::SOAField<WeightTag, float>>;
 };
 
 // ---------------------------------------------------------------------------
@@ -175,10 +172,13 @@ using UnitAllocFor =
                           typename T::BackwardPass::Accumulator,
                           typename T::ExtraUnitFields>;
 
+// Helper: resolve the connection allocator for a given traits type.
+template <typename T>
+using ConnAllocFor = MakeConnAllocatorFrom<typename T::ExtraConnFields>;
+
 template <typename T>
 concept NetworkTraits =
     requires {
-      typename T::ConnAllocator;
       typename T::GlobalState;
       typename T::ForwardPass;
       typename T::ForwardPass::Accumulator;
@@ -191,22 +191,23 @@ concept NetworkTraits =
       typename T::AddUnit;
       typename T::AddConn;
       typename T::ExtraUnitFields;
+      typename T::ExtraConnFields;
     } &&
-    PassPolicy<typename T::ForwardPass, UnitAllocFor<T>,
-               typename T::ConnAllocator, typename T::GlobalState> &&
-    PassPolicy<typename T::BackwardPass, UnitAllocFor<T>,
-               typename T::ConnAllocator, typename T::GlobalState> &&
+    PassPolicy<typename T::ForwardPass, UnitAllocFor<T>, ConnAllocFor<T>,
+               typename T::GlobalState> &&
+    PassPolicy<typename T::BackwardPass, UnitAllocFor<T>, ConnAllocFor<T>,
+               typename T::GlobalState> &&
     UpdateUnitPolicy<typename T::UpdateUnit, UnitAllocFor<T>,
                      typename T::GlobalState> &&
-    UpdateConnPolicy<typename T::UpdateConn, UnitAllocFor<T>,
-                     typename T::ConnAllocator, typename T::GlobalState> &&
+    UpdateConnPolicy<typename T::UpdateConn, UnitAllocFor<T>, ConnAllocFor<T>,
+                     typename T::GlobalState> &&
     PruneUnitPolicy<typename T::PruneUnit, UnitAllocFor<T>,
                     typename T::GlobalState> &&
-    PruneConnPolicy<typename T::PruneConn, UnitAllocFor<T>,
-                    typename T::ConnAllocator, typename T::GlobalState> &&
+    PruneConnPolicy<typename T::PruneConn, UnitAllocFor<T>, ConnAllocFor<T>,
+                    typename T::GlobalState> &&
     AddUnitPolicy<typename T::AddUnit, UnitAllocFor<T>,
                   typename T::GlobalState> &&
-    AddConnPolicy<typename T::AddConn, UnitAllocFor<T>,
+    AddConnPolicy<typename T::AddConn, UnitAllocFor<T>, ConnAllocFor<T>,
                   typename T::GlobalState>;
 
 } // namespace plastix

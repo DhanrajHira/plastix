@@ -1,7 +1,0 @@
-SOA_TYPE(ConnectionState)
-FIELD(FromId, uint32_t)
-FIELD(ToId, uint32_t)
-FIELD(Weight, float)
-FIELD(Dead, bool)
-FIELD(SrcLevel, uint16_t)
-SOA_END()

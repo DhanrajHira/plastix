@@ -45,7 +45,7 @@ using KahnScratchAllocator =
 
 template <NetworkTraits Traits> class Network {
   using UnitAllocator = UnitAllocFor<Traits>;
-  using ConnAllocator = typename Traits::ConnAllocator;
+  using ConnAllocator = ConnAllocFor<Traits>;
   using GlobalState = typename Traits::GlobalState;
 
 public:
@@ -240,30 +240,30 @@ public:
           if (Self == Other)
             continue;
 
-          auto [AddIn, WeightIn] =
-              AC::ShouldAddIncomingConnection(UnitAlloc, Self, Other, Globals);
-          if (AddIn) {
+          if (AC::ShouldAddIncomingConnection(UnitAlloc, Self, Other,
+                                              Globals)) {
             auto ConnId = ConnAlloc.Allocate();
             ConnAlloc.template Get<FromIdTag>(ConnId) =
                 static_cast<uint32_t>(Other);
             ConnAlloc.template Get<ToIdTag>(ConnId) =
                 static_cast<uint32_t>(Self);
-            ConnAlloc.template Get<WeightTag>(ConnId) = WeightIn;
             ConnAlloc.template Get<SrcLevelTag>(ConnId) =
                 UnitAlloc.template Get<LevelTag>(Other);
+            AC::InitConnection(UnitAlloc, Other, Self, ConnAlloc, ConnId,
+                               Globals);
           }
 
-          auto [AddOut, WeightOut] =
-              AC::ShouldAddOutgoingConnection(UnitAlloc, Self, Other, Globals);
-          if (AddOut) {
+          if (AC::ShouldAddOutgoingConnection(UnitAlloc, Self, Other,
+                                              Globals)) {
             auto ConnId = ConnAlloc.Allocate();
             ConnAlloc.template Get<FromIdTag>(ConnId) =
                 static_cast<uint32_t>(Self);
             ConnAlloc.template Get<ToIdTag>(ConnId) =
                 static_cast<uint32_t>(Other);
-            ConnAlloc.template Get<WeightTag>(ConnId) = WeightOut;
             ConnAlloc.template Get<SrcLevelTag>(ConnId) =
                 UnitAlloc.template Get<LevelTag>(Self);
+            AC::InitConnection(UnitAlloc, Self, Other, ConnAlloc, ConnId,
+                               Globals);
           }
         }
       }

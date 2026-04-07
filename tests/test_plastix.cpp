@@ -8,7 +8,7 @@ TEST(PlastixTest, Version) { EXPECT_STREQ(plastix::version(), "0.1.0"); }
 
 namespace plastix_test {
 
-using TestTraits = plastix::DefaultNetworkTraits<plastix::ConnStateAllocator>;
+using TestTraits = plastix::DefaultNetworkTraits<>;
 using TestNetwork = plastix::Network<TestTraits>;
 
 struct WeightOneInit {
@@ -83,8 +83,7 @@ struct ScaledForwardPass {
   }
 };
 
-struct CustomForwardTraits
-    : plastix::DefaultNetworkTraits<plastix::ConnStateAllocator> {
+struct CustomForwardTraits : plastix::DefaultNetworkTraits<> {
   using ForwardPass = ScaledForwardPass;
 };
 
@@ -99,9 +98,7 @@ struct TestGlobalState {
   float DropoutRate = 0.4f;
 };
 
-struct CustomGlobalTraits
-    : plastix::DefaultNetworkTraits<plastix::ConnStateAllocator,
-                                    TestGlobalState> {};
+struct CustomGlobalTraits : plastix::DefaultNetworkTraits<TestGlobalState> {};
 
 TEST(NetworkTraitsTest, CustomGlobalState) {
   static_assert(plastix::NetworkTraits<CustomGlobalTraits>);
@@ -197,8 +194,7 @@ struct GradientBackwardPass {
   static void Apply(auto &, size_t, auto &, float) {}
 };
 
-struct GradientBackwardTraits
-    : plastix::DefaultNetworkTraits<plastix::ConnStateAllocator> {
+struct GradientBackwardTraits : plastix::DefaultNetworkTraits<> {
   using BackwardPass = GradientBackwardPass;
 };
 
@@ -386,8 +382,7 @@ struct CopyActivationToBackwardAcc {
   }
 };
 
-struct UpdateUnitTraits
-    : plastix::DefaultNetworkTraits<plastix::ConnStateAllocator> {
+struct UpdateUnitTraits : plastix::DefaultNetworkTraits<> {
   using UpdateUnit = CopyActivationToBackwardAcc;
 };
 
@@ -419,8 +414,7 @@ struct WeightDecayUpdateConn {
                                        auto &) {}
 };
 
-struct UpdateConnTraits
-    : plastix::DefaultNetworkTraits<plastix::ConnStateAllocator> {
+struct UpdateConnTraits : plastix::DefaultNetworkTraits<> {
   using UpdateConn = WeightDecayUpdateConn;
 };
 
@@ -441,8 +435,7 @@ TEST(UpdateTest, UpdateConnStateWeightDecay) {
 // DoStep with update policies
 // ---------------------------------------------------------------------------
 
-struct DoStepUpdateTraits
-    : plastix::DefaultNetworkTraits<plastix::ConnStateAllocator> {
+struct DoStepUpdateTraits : plastix::DefaultNetworkTraits<> {
   using UpdateUnit = CopyActivationToBackwardAcc;
   using UpdateConn = WeightDecayUpdateConn;
 };
@@ -488,8 +481,7 @@ struct PruneUnitById {
   }
 };
 
-struct PruneUnitTraits
-    : plastix::DefaultNetworkTraits<plastix::ConnStateAllocator> {
+struct PruneUnitTraits : plastix::DefaultNetworkTraits<> {
   using PruneUnit = PruneUnitById;
 };
 
@@ -535,8 +527,7 @@ struct PruneDestUnit {
 };
 size_t PruneDestUnit::TargetId = 0;
 
-struct PruneDestTraits
-    : plastix::DefaultNetworkTraits<plastix::ConnStateAllocator> {
+struct PruneDestTraits : plastix::DefaultNetworkTraits<> {
   using PruneUnit = PruneDestUnit;
 };
 
@@ -561,8 +552,7 @@ struct PruneSmallWeight {
   }
 };
 
-struct PruneConnTraits
-    : plastix::DefaultNetworkTraits<plastix::ConnStateAllocator> {
+struct PruneConnTraits : plastix::DefaultNetworkTraits<> {
   using PruneConn = PruneSmallWeight;
 };
 
@@ -700,8 +690,7 @@ struct AddOneUnit {
   }
 };
 
-struct AddUnitTraits
-    : plastix::DefaultNetworkTraits<plastix::ConnStateAllocator> {
+struct AddUnitTraits : plastix::DefaultNetworkTraits<> {
   using AddUnit = AddOneUnit;
 };
 
@@ -766,60 +755,60 @@ TEST(AddUnitTest, NewUnitDefaultActivation) {
 
 // Policy that adds one incoming connection: unit 0 accepts from unit 1.
 struct AddOneIncoming {
-  static plastix::AddConnResult
-  ShouldAddIncomingConnection(auto &, size_t Self, size_t Candidate, auto &) {
-    if (Self == 0 && Candidate == 1)
-      return {true, 0.5f};
-    return {false, 0.0f};
+  static bool ShouldAddIncomingConnection(auto &, size_t Self, size_t Candidate,
+                                          auto &) {
+    return Self == 0 && Candidate == 1;
   }
-  static plastix::AddConnResult ShouldAddOutgoingConnection(auto &, size_t,
-                                                            size_t, auto &) {
-    return {false, 0.0f};
+  static bool ShouldAddOutgoingConnection(auto &, size_t, size_t, auto &) {
+    return false;
+  }
+  static void InitConnection(auto &, size_t, size_t, auto &C, size_t ConnId,
+                             auto &) {
+    C.template Get<plastix::WeightTag>(ConnId) = 0.5f;
   }
 };
 
-struct AddIncomingTraits
-    : plastix::DefaultNetworkTraits<plastix::ConnStateAllocator> {
+struct AddIncomingTraits : plastix::DefaultNetworkTraits<> {
   using AddConn = AddOneIncoming;
 };
 
 // Policy that adds one outgoing connection: unit 1 sends to unit 0.
 struct AddOneOutgoing {
-  static plastix::AddConnResult ShouldAddIncomingConnection(auto &, size_t,
-                                                            size_t, auto &) {
-    return {false, 0.0f};
+  static bool ShouldAddIncomingConnection(auto &, size_t, size_t, auto &) {
+    return false;
   }
-  static plastix::AddConnResult
-  ShouldAddOutgoingConnection(auto &, size_t Self, size_t Candidate, auto &) {
-    if (Self == 1 && Candidate == 0)
-      return {true, 0.75f};
-    return {false, 0.0f};
+  static bool ShouldAddOutgoingConnection(auto &, size_t Self, size_t Candidate,
+                                          auto &) {
+    return Self == 1 && Candidate == 0;
+  }
+  static void InitConnection(auto &, size_t, size_t, auto &C, size_t ConnId,
+                             auto &) {
+    C.template Get<plastix::WeightTag>(ConnId) = 0.75f;
   }
 };
 
-struct AddOutgoingTraits
-    : plastix::DefaultNetworkTraits<plastix::ConnStateAllocator> {
+struct AddOutgoingTraits : plastix::DefaultNetworkTraits<> {
   using AddConn = AddOneOutgoing;
 };
 
 // Policy that adds via both methods: incoming 1→0, outgoing 2→0.
 struct AddBothDirections {
-  static plastix::AddConnResult
-  ShouldAddIncomingConnection(auto &, size_t Self, size_t Candidate, auto &) {
-    if (Self == 0 && Candidate == 1)
-      return {true, 0.3f};
-    return {false, 0.0f};
+  static bool ShouldAddIncomingConnection(auto &, size_t Self, size_t Candidate,
+                                          auto &) {
+    return Self == 0 && Candidate == 1;
   }
-  static plastix::AddConnResult
-  ShouldAddOutgoingConnection(auto &, size_t Self, size_t Candidate, auto &) {
-    if (Self == 2 && Candidate == 0)
-      return {true, 0.7f};
-    return {false, 0.0f};
+  static bool ShouldAddOutgoingConnection(auto &, size_t Self, size_t Candidate,
+                                          auto &) {
+    return Self == 2 && Candidate == 0;
+  }
+  static void InitConnection(auto &, size_t SrcId, size_t, auto &C,
+                             size_t ConnId, auto &) {
+    // Incoming 1→0 gets 0.3, outgoing 2→0 gets 0.7. Distinguish by SrcId.
+    C.template Get<plastix::WeightTag>(ConnId) = (SrcId == 1) ? 0.3f : 0.7f;
   }
 };
 
-struct AddBothTraits
-    : plastix::DefaultNetworkTraits<plastix::ConnStateAllocator> {
+struct AddBothTraits : plastix::DefaultNetworkTraits<> {
   using AddConn = AddBothDirections;
 };
 
@@ -896,20 +885,20 @@ TEST(AddConnTest, CalledTwiceAddsAgain) {
 
 // Policy that adds a connection 0→2 with weight 0.5 (targets the output unit).
 struct AddConnToOutput {
-  static plastix::AddConnResult
-  ShouldAddIncomingConnection(auto &, size_t Self, size_t Candidate, auto &) {
-    if (Self == 2 && Candidate == 0)
-      return {true, 0.5f};
-    return {false, 0.0f};
+  static bool ShouldAddIncomingConnection(auto &, size_t Self, size_t Candidate,
+                                          auto &) {
+    return Self == 2 && Candidate == 0;
   }
-  static plastix::AddConnResult ShouldAddOutgoingConnection(auto &, size_t,
-                                                            size_t, auto &) {
-    return {false, 0.0f};
+  static bool ShouldAddOutgoingConnection(auto &, size_t, size_t, auto &) {
+    return false;
+  }
+  static void InitConnection(auto &, size_t, size_t, auto &C, size_t ConnId,
+                             auto &) {
+    C.template Get<plastix::WeightTag>(ConnId) = 0.5f;
   }
 };
 
-struct AddConnToOutputTraits
-    : plastix::DefaultNetworkTraits<plastix::ConnStateAllocator> {
+struct AddConnToOutputTraits : plastix::DefaultNetworkTraits<> {
   using AddConn = AddConnToOutput;
 };
 
