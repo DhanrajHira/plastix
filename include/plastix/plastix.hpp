@@ -5,6 +5,7 @@
 #include "plastix/layers.hpp"
 #include "plastix/traits.hpp"
 #include "plastix/unit_state.hpp"
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -43,6 +44,15 @@ using KahnScratchAllocator =
                         alloc::SOAField<FrontierTag, uint32_t>,
                         alloc::SOAField<NextFrontierTag, uint32_t>>;
 
+struct ProposalFromTag {};
+struct ProposalToTag {};
+struct ProposalEntity {};
+
+using ProposalScratchAllocator =
+    alloc::SOAAllocator<ProposalEntity,
+                        alloc::SOAField<ProposalFromTag, uint32_t>,
+                        alloc::SOAField<ProposalToTag, uint32_t>>;
+
 template <NetworkTraits Traits> class Network {
   using UnitAllocator = UnitAllocFor<Traits>;
   using ConnAllocator = ConnAllocFor<Traits>;
@@ -54,7 +64,8 @@ public:
              (LayerBuilder<Builders, UnitAllocator, ConnAllocator> && ...))
   Network(size_t InputDim, Builders... Layers)
       : NumInput(InputDim), UnitAlloc(256), ConnAlloc(256),
-        KahnAlloc(UnitAlloc.GetCapacity() + 1) {
+        KahnAlloc(UnitAlloc.GetCapacity() + 1),
+        ProposalAlloc(ConnAlloc.GetCapacity()) {
     for (size_t I = 0; I < InputDim; ++I)
       (void)UnitAlloc.Allocate();
     UnitRange Prev{0, InputDim};
@@ -232,8 +243,15 @@ public:
     else {
       using AC = typename Traits::AddConn;
       constexpr uint16_t N = Traits::Neighbourhood;
-      size_t SizeBefore = ConnAlloc.Size();
+
+      // Phase 1: Collect proposals into scratch buffer.
+      uint32_t *PropFrom =
+          ProposalAlloc.template GetArrayFor<ProposalFromTag>();
+      uint32_t *PropTo = ProposalAlloc.template GetArrayFor<ProposalToTag>();
+      size_t NumProposals = 0;
+      size_t MaxProposals = ProposalAlloc.GetCapacity();
       size_t NumUnits = UnitAlloc.Size();
+
       for (size_t Self = 0; Self < NumUnits; ++Self) {
         uint16_t SelfLevel = UnitAlloc.template Get<LevelTag>(Self);
         for (size_t Other = 0; Other < NumUnits; ++Other) {
@@ -246,31 +264,58 @@ public:
           if (Dist > N)
             continue;
 
-          if (AC::ShouldAddIncomingConnection(UnitAlloc, Self, Other,
+          if (NumProposals < MaxProposals &&
+              AC::ShouldAddIncomingConnection(UnitAlloc, Self, Other,
                                               Globals)) {
-            auto ConnId = ConnAlloc.Allocate();
-            ConnAlloc.template Get<FromIdTag>(ConnId) =
-                static_cast<uint32_t>(Other);
-            ConnAlloc.template Get<ToIdTag>(ConnId) =
-                static_cast<uint32_t>(Self);
-            ConnAlloc.template Get<SrcLevelTag>(ConnId) = OtherLevel;
-            AC::InitConnection(UnitAlloc, Other, Self, ConnAlloc, ConnId,
-                               Globals);
+            PropFrom[NumProposals] = static_cast<uint32_t>(Other);
+            PropTo[NumProposals] = static_cast<uint32_t>(Self);
+            ++NumProposals;
           }
 
-          if (AC::ShouldAddOutgoingConnection(UnitAlloc, Self, Other,
+          if (NumProposals < MaxProposals &&
+              AC::ShouldAddOutgoingConnection(UnitAlloc, Self, Other,
                                               Globals)) {
-            auto ConnId = ConnAlloc.Allocate();
-            ConnAlloc.template Get<FromIdTag>(ConnId) =
-                static_cast<uint32_t>(Self);
-            ConnAlloc.template Get<ToIdTag>(ConnId) =
-                static_cast<uint32_t>(Other);
-            ConnAlloc.template Get<SrcLevelTag>(ConnId) = SelfLevel;
-            AC::InitConnection(UnitAlloc, Self, Other, ConnAlloc, ConnId,
-                               Globals);
+            PropFrom[NumProposals] = static_cast<uint32_t>(Self);
+            PropTo[NumProposals] = static_cast<uint32_t>(Other);
+            ++NumProposals;
           }
         }
       }
+
+      if (NumProposals == 0)
+        return;
+
+      // Phase 2: Sort proposals by (From, To) and deduplicate.
+      size_t *Perm = ProposalAlloc.PermutationScratch();
+      for (size_t I = 0; I < NumProposals; ++I)
+        Perm[I] = I;
+
+      std::sort(Perm, Perm + NumProposals, [&](size_t A, size_t B) {
+        if (PropFrom[A] != PropFrom[B])
+          return PropFrom[A] < PropFrom[B];
+        return PropTo[A] < PropTo[B];
+      });
+
+      // Phase 3: Commit unique proposals.
+      size_t SizeBefore = ConnAlloc.Size();
+      uint32_t PrevFrom = UINT32_MAX, PrevTo = UINT32_MAX;
+      for (size_t I = 0; I < NumProposals; ++I) {
+        size_t Idx = Perm[I];
+        uint32_t F = PropFrom[Idx];
+        uint32_t T = PropTo[Idx];
+        if (F == PrevFrom && T == PrevTo)
+          continue;
+        PrevFrom = F;
+        PrevTo = T;
+
+        auto ConnId = ConnAlloc.Allocate();
+        ConnAlloc.template Get<FromIdTag>(ConnId) = F;
+        ConnAlloc.template Get<ToIdTag>(ConnId) = T;
+        ConnAlloc.template Get<SrcLevelTag>(ConnId) =
+            UnitAlloc.template Get<LevelTag>(F);
+        AC::InitConnection(UnitAlloc, F, T, ConnAlloc, ConnId, Globals);
+      }
+
       if (ConnAlloc.Size() > SizeBefore)
         NeedsResort = true;
     }
@@ -426,6 +471,7 @@ private:
   uint16_t NumLevels = 0;
   bool NeedsResort = false;
   KahnScratchAllocator KahnAlloc;
+  ProposalScratchAllocator ProposalAlloc;
 };
 
 } // namespace plastix
