@@ -44,8 +44,8 @@ concept PassPolicy =
 // The Partial type alias is part of the interface so Network can zero-init
 // accumulators without knowing the concrete type.
 template <typename P, typename UnitAlloc, typename Global>
-concept UpdateUnitPolicy = requires(UnitAlloc &U, Global &G) {
-  { P::Update(U, G) } -> std::same_as<void>;
+concept UpdateUnitPolicy = requires(UnitAlloc &U, size_t Id, Global &G) {
+  { P::Update(U, Id, G) } -> std::same_as<void>;
 };
 
 // AddUnitPolicy determines if a unit should be added within some spheroid
@@ -169,7 +169,7 @@ struct NoBackwardPass {
 };
 
 struct NoUpdateUnit {
-  static void Update(auto &, auto &) {}
+  static void Update(auto &, size_t, auto &) {}
 };
 
 struct NoAddUnit {
