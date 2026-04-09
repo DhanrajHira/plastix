@@ -2,10 +2,10 @@
 #define PLASTIX_TRAITS_HPP
 
 #include "plastix/conn.hpp"
-#include "plastix/position.hpp"
 #include "plastix/unit_state.hpp"
 #include <concepts>
 #include <cstddef>
+#include <optional>
 
 namespace plastix {
 
@@ -60,7 +60,7 @@ concept PruneConnPolicy = requires(UnitAlloc &U, size_t DstId, size_t SrcId,
 
 template <typename P, typename UnitAlloc, typename Global>
 concept AddUnitPolicy = requires(UnitAlloc &U, size_t Id, Global &G) {
-  { P::AddUnit(U, Id, G) } -> std::convertible_to<UnitPosition>;
+  { P::AddUnit(U, Id, G) } -> std::same_as<std::optional<uint16_t>>;
 };
 
 template <typename P, typename UnitAlloc, typename ConnAlloc, typename Global>
@@ -128,7 +128,9 @@ struct NoPruneConn {
 };
 
 struct NoAddUnit {
-  static UnitPosition AddUnit(auto &, size_t, auto &) { return {}; }
+  static std::optional<uint16_t> AddUnit(auto &, size_t, auto &) {
+    return std::nullopt;
+  }
 };
 
 struct NoAddConn {
@@ -159,6 +161,7 @@ template <typename Global = EmptyGlobalState> struct DefaultNetworkTraits {
   using AddConn = NoAddConn;
   using ExtraUnitFields = UnitFieldList<>;
   using ExtraConnFields = ConnFieldList<alloc::SOAField<WeightTag, float>>;
+  static constexpr uint16_t Neighbourhood = 1;
 };
 
 // ---------------------------------------------------------------------------
@@ -192,6 +195,7 @@ concept NetworkTraits =
       typename T::AddConn;
       typename T::ExtraUnitFields;
       typename T::ExtraConnFields;
+      { T::Neighbourhood } -> std::convertible_to<uint16_t>;
     } &&
     PassPolicy<typename T::ForwardPass, UnitAllocFor<T>, ConnAllocFor<T>,
                typename T::GlobalState> &&

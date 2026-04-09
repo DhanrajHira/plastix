@@ -2,7 +2,6 @@
 #define PLASTIX_UNIT_STATE_HPP
 
 #include "plastix/alloc.hpp"
-#include "plastix/position.hpp"
 
 namespace plastix {
 
@@ -13,7 +12,6 @@ struct ActivationTag {};
 struct ForwardAccTag {};
 struct BackwardAccTag {};
 struct PrunedTag {};
-struct PositionTag {};
 struct LevelTag {};
 
 // Type list for user-defined extra unit fields.
@@ -29,7 +27,6 @@ using MakeUnitAllocator =
                         alloc::SOAField<ForwardAccTag, FwdAcc>,
                         alloc::SOAField<BackwardAccTag, BwdAcc>,
                         alloc::SOAField<PrunedTag, bool>,
-                        alloc::SOAField<PositionTag, UnitPosition>,
                         alloc::SOAField<LevelTag, uint16_t>, ExtraFields...>;
 
 // Helper to unpack a UnitFieldList into MakeUnitAllocator.

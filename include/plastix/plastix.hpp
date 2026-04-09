@@ -55,12 +55,8 @@ public:
   Network(size_t InputDim, Builders... Layers)
       : NumInput(InputDim), UnitAlloc(256), ConnAlloc(256),
         KahnAlloc(UnitAlloc.GetCapacity() + 1) {
-    for (size_t I = 0; I < InputDim; ++I) {
-      auto Id = UnitAlloc.Allocate();
-      float Y = static_cast<float>(I) - static_cast<float>(InputDim - 1) / 2.0f;
-      UnitAlloc.template Get<PositionTag>(Id) = {
-          _Float16{0}, static_cast<_Float16>(Y), _Float16{0}, 0};
-    }
+    for (size_t I = 0; I < InputDim; ++I)
+      (void)UnitAlloc.Allocate();
     UnitRange Prev{0, InputDim};
     ((Prev = Layers(UnitAlloc, ConnAlloc, Prev)), ...);
     OutputRange = Prev;
@@ -222,10 +218,10 @@ public:
       using AP = typename Traits::AddUnit;
       size_t NumUnits = UnitAlloc.Size();
       for (size_t I = 0; I < NumUnits; ++I) {
-        auto Pos = AP::AddUnit(UnitAlloc, I, Globals);
-        if (Pos) {
+        auto Level = AP::AddUnit(UnitAlloc, I, Globals);
+        if (Level.has_value()) {
           auto NewId = UnitAlloc.Allocate();
-          UnitAlloc.template Get<PositionTag>(NewId) = Pos;
+          UnitAlloc.template Get<LevelTag>(NewId) = *Level;
         }
       }
     }
@@ -235,11 +231,19 @@ public:
       return;
     else {
       using AC = typename Traits::AddConn;
+      constexpr uint16_t N = Traits::Neighbourhood;
       size_t SizeBefore = ConnAlloc.Size();
       size_t NumUnits = UnitAlloc.Size();
       for (size_t Self = 0; Self < NumUnits; ++Self) {
+        uint16_t SelfLevel = UnitAlloc.template Get<LevelTag>(Self);
         for (size_t Other = 0; Other < NumUnits; ++Other) {
           if (Self == Other)
+            continue;
+
+          uint16_t OtherLevel = UnitAlloc.template Get<LevelTag>(Other);
+          uint16_t Dist = (SelfLevel >= OtherLevel) ? (SelfLevel - OtherLevel)
+                                                    : (OtherLevel - SelfLevel);
+          if (Dist > N)
             continue;
 
           if (AC::ShouldAddIncomingConnection(UnitAlloc, Self, Other,
@@ -249,8 +253,7 @@ public:
                 static_cast<uint32_t>(Other);
             ConnAlloc.template Get<ToIdTag>(ConnId) =
                 static_cast<uint32_t>(Self);
-            ConnAlloc.template Get<SrcLevelTag>(ConnId) =
-                UnitAlloc.template Get<LevelTag>(Other);
+            ConnAlloc.template Get<SrcLevelTag>(ConnId) = OtherLevel;
             AC::InitConnection(UnitAlloc, Other, Self, ConnAlloc, ConnId,
                                Globals);
           }
@@ -262,8 +265,7 @@ public:
                 static_cast<uint32_t>(Self);
             ConnAlloc.template Get<ToIdTag>(ConnId) =
                 static_cast<uint32_t>(Other);
-            ConnAlloc.template Get<SrcLevelTag>(ConnId) =
-                UnitAlloc.template Get<LevelTag>(Self);
+            ConnAlloc.template Get<SrcLevelTag>(ConnId) = SelfLevel;
             AC::InitConnection(UnitAlloc, Self, Other, ConnAlloc, ConnId,
                                Globals);
           }
