@@ -396,10 +396,9 @@ TEST(OutputTest, DoStepGetOutput) {
 // ---------------------------------------------------------------------------
 
 struct CopyActivationToBackwardAcc {
-  static void Update(auto &U, auto &) {
-    for (size_t I = 0; I < U.Size(); ++I)
-      U.template Get<plastix::BackwardAccTag>(I) =
-          U.template Get<plastix::ActivationTag>(I);
+  static void Update(auto &U, size_t Id, auto &) {
+    U.template Get<plastix::BackwardAccTag>(Id) =
+        U.template Get<plastix::ActivationTag>(Id);
   }
 };
 

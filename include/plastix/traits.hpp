@@ -32,8 +32,8 @@ concept PassPolicy =
     };
 
 template <typename P, typename UnitAlloc, typename Global>
-concept UpdateUnitPolicy = requires(UnitAlloc &U, Global &G) {
-  { P::Update(U, G) } -> std::same_as<void>;
+concept UpdateUnitPolicy = requires(UnitAlloc &U, size_t Id, Global &G) {
+  { P::Update(U, Id, G) } -> std::same_as<void>;
 };
 
 template <typename P, typename UnitAlloc, typename ConnAlloc, typename Global>
@@ -91,7 +91,7 @@ struct NoBackwardPass {
 };
 
 struct NoUpdateUnit {
-  static void Update(auto &, auto &) {}
+  static void Update(auto &, size_t, auto &) {}
 };
 
 struct NoUpdateConn {

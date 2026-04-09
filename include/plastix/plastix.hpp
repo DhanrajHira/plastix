@@ -101,7 +101,9 @@ public:
       return;
     else {
       using UP = typename Traits::UpdateUnit;
-      UP::Update(UnitAlloc, Globals);
+      size_t NumUnits = UnitAlloc.Size();
+      for (size_t I = 0; I < NumUnits; ++I)
+        UP::Update(UnitAlloc, I, Globals);
     }
   }
 
