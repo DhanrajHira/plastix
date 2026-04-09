@@ -3,6 +3,7 @@
 #include "plastix/plastix.hpp"
 #include <array>
 #include <cmath>
+#include <optional>
 
 TEST(PlastixTest, Version) { EXPECT_STREQ(plastix::version(), "0.1.0"); }
 
@@ -600,92 +601,15 @@ TEST(PruneTest, DoStepWithPrune) {
 }
 
 // ---------------------------------------------------------------------------
-// Position tests
-// ---------------------------------------------------------------------------
-
-TEST(PositionTest, InputUnitsAtXZeroCenteredY) {
-  // 3 inputs: Y positions should be -1, 0, 1 centered at 0.
-  TestNetwork Net(3, 1);
-  auto &UA = Net.GetUnitAlloc();
-
-  auto P0 = UA.Get<plastix::PositionTag>(0);
-  auto P1 = UA.Get<plastix::PositionTag>(1);
-  auto P2 = UA.Get<plastix::PositionTag>(2);
-
-  // All at X=0, Z=0
-  EXPECT_EQ(static_cast<float>(P0.X), 0.0f);
-  EXPECT_EQ(static_cast<float>(P1.X), 0.0f);
-  EXPECT_EQ(static_cast<float>(P2.X), 0.0f);
-  EXPECT_EQ(static_cast<float>(P0.Z), 0.0f);
-
-  // Y centered: -1, 0, 1
-  EXPECT_EQ(static_cast<float>(P0.Y), -1.0f);
-  EXPECT_EQ(static_cast<float>(P1.Y), 0.0f);
-  EXPECT_EQ(static_cast<float>(P2.Y), 1.0f);
-}
-
-TEST(PositionTest, SingleInputAtOrigin) {
-  // 1 input: should be at (0, 0, 0).
-  TestNetwork Net(1, 1);
-  auto &UA = Net.GetUnitAlloc();
-  auto P = UA.Get<plastix::PositionTag>(0);
-  EXPECT_EQ(static_cast<float>(P.X), 0.0f);
-  EXPECT_EQ(static_cast<float>(P.Y), 0.0f);
-  EXPECT_EQ(static_cast<float>(P.Z), 0.0f);
-}
-
-TEST(PositionTest, FCLayerAtNextX) {
-  // 2 inputs -> 1 output. Output at X=1, Y=0.
-  TestNetwork Net(2, 1);
-  auto &UA = Net.GetUnitAlloc();
-  auto P = UA.Get<plastix::PositionTag>(2); // output unit
-  EXPECT_EQ(static_cast<float>(P.X), 1.0f);
-  EXPECT_EQ(static_cast<float>(P.Y), 0.0f);
-}
-
-TEST(PositionTest, FCLayerCenteredY) {
-  // 2 inputs -> 3 outputs. Outputs at X=1, Y=-1, 0, 1.
-  TestNetwork Net(2, 3);
-  auto &UA = Net.GetUnitAlloc();
-
-  EXPECT_EQ(static_cast<float>(UA.Get<plastix::PositionTag>(2).X), 1.0f);
-  EXPECT_EQ(static_cast<float>(UA.Get<plastix::PositionTag>(2).Y), -1.0f);
-  EXPECT_EQ(static_cast<float>(UA.Get<plastix::PositionTag>(3).Y), 0.0f);
-  EXPECT_EQ(static_cast<float>(UA.Get<plastix::PositionTag>(4).Y), 1.0f);
-}
-
-TEST(PositionTest, MultiLayerXProgression) {
-  // 2 inputs -> 3 hidden -> 1 output.
-  // Inputs at X=0, hidden at X=1, output at X=2.
-  TestNetwork Net(2, FC{3}, FC{1});
-  auto &UA = Net.GetUnitAlloc();
-
-  // Inputs at X=0
-  EXPECT_EQ(static_cast<float>(UA.Get<plastix::PositionTag>(0).X), 0.0f);
-  EXPECT_EQ(static_cast<float>(UA.Get<plastix::PositionTag>(1).X), 0.0f);
-
-  // Hidden at X=1, Y=-1, 0, 1
-  EXPECT_EQ(static_cast<float>(UA.Get<plastix::PositionTag>(2).X), 1.0f);
-  EXPECT_EQ(static_cast<float>(UA.Get<plastix::ActivationTag>(2)), 0.0f);
-  EXPECT_EQ(static_cast<float>(UA.Get<plastix::PositionTag>(2).Y), -1.0f);
-  EXPECT_EQ(static_cast<float>(UA.Get<plastix::PositionTag>(3).Y), 0.0f);
-  EXPECT_EQ(static_cast<float>(UA.Get<plastix::PositionTag>(4).Y), 1.0f);
-
-  // Output at X=2, Y=0
-  EXPECT_EQ(static_cast<float>(UA.Get<plastix::PositionTag>(5).X), 2.0f);
-  EXPECT_EQ(static_cast<float>(UA.Get<plastix::PositionTag>(5).Y), 0.0f);
-}
-
-// ---------------------------------------------------------------------------
 // AddUnit tests
 // ---------------------------------------------------------------------------
 
-// Policy that adds a new unit at (5, 5, 5) for unit 0 only.
+// Policy that adds a new unit at level 5 for unit 0 only.
 struct AddOneUnit {
-  static plastix::UnitPosition AddUnit(auto &, size_t Id, auto &) {
+  static std::optional<uint16_t> AddUnit(auto &, size_t Id, auto &) {
     if (Id == 0)
-      return {_Float16{5}, _Float16{5}, _Float16{5}, 0};
-    return {};
+      return uint16_t{5};
+    return std::nullopt;
   }
 };
 
@@ -701,24 +625,21 @@ TEST(AddUnitTest, NoopDoesNotAddUnits) {
   EXPECT_EQ(Net.GetUnitAlloc().Size(), 3u);
 }
 
-TEST(AddUnitTest, AddsUnitAtReturnedPosition) {
-  // AddOneUnit returns non-zero for unit 0 only => 1 new unit.
+TEST(AddUnitTest, AddsUnitAtReturnedLevel) {
+  // AddOneUnit returns level 5 for unit 0 only => 1 new unit.
   plastix::Network<AddUnitTraits> Net(2, 1);
   EXPECT_EQ(Net.GetUnitAlloc().Size(), 3u);
 
   Net.DoAddUnits();
   EXPECT_EQ(Net.GetUnitAlloc().Size(), 4u);
 
-  // New unit (id=3) should be at (5, 5, 5).
+  // New unit (id=3) should be at level 5.
   auto &UA = Net.GetUnitAlloc();
-  auto Pos = UA.Get<plastix::PositionTag>(3);
-  EXPECT_EQ(static_cast<float>(Pos.X), 5.0f);
-  EXPECT_EQ(static_cast<float>(Pos.Y), 5.0f);
-  EXPECT_EQ(static_cast<float>(Pos.Z), 5.0f);
+  EXPECT_EQ(UA.Get<plastix::LevelTag>(3), uint16_t{5});
 }
 
-TEST(AddUnitTest, ZeroReturnDoesNotAdd) {
-  // AddOneUnit returns zero for all units except unit 0.
+TEST(AddUnitTest, NulloptReturnDoesNotAdd) {
+  // AddOneUnit returns nullopt for all units except unit 0.
   // With 2 inputs + 1 output = 3 units, only unit 0 triggers an add.
   plastix::Network<AddUnitTraits> Net(2, 1);
   Net.DoAddUnits();
@@ -979,6 +900,89 @@ TEST(LevelTest, AddConnectionTriggersResort) {
   Net.DoAddConnections(); // adds 0→2 with w=0.5
   Net.DoForwardPass(In);  // should re-sort and include new connection
   EXPECT_FLOAT_EQ(Net.GetOutput()[0], 6.0f);
+}
+
+// ---------------------------------------------------------------------------
+// Neighbourhood filtering tests
+// ---------------------------------------------------------------------------
+
+// Policy that tries to add incoming connections between all pairs.
+struct AddAllIncoming {
+  static bool ShouldAddIncomingConnection(auto &, size_t Self, size_t Candidate,
+                                          auto &) {
+    return Self > Candidate;
+  }
+  static bool ShouldAddOutgoingConnection(auto &, size_t, size_t, auto &) {
+    return false;
+  }
+  static void InitConnection(auto &, size_t, size_t, auto &C, size_t ConnId,
+                             auto &) {
+    C.template Get<plastix::WeightTag>(ConnId) = 1.0f;
+  }
+};
+
+struct ZeroNeighbourhoodTraits : plastix::DefaultNetworkTraits<> {
+  using AddConn = AddOneIncoming;
+  static constexpr uint16_t Neighbourhood = 0;
+};
+
+TEST(NeighbourhoodTest, ZeroNeighbourhoodBlocksCrossLevelConnections) {
+  // 2 inputs (level 0), 1 output (level 1).
+  // AddOneIncoming: unit 0 accepts from unit 1 (same level, dist=0, allowed).
+  // The policy also checks pairs like (2,0) and (2,1) which have dist=1,
+  // but those are blocked by Neighbourhood=0.
+  plastix::Network<ZeroNeighbourhoodTraits> Net(2, 1);
+  Net.DoAddConnections();
+
+  auto &CA = Net.GetConnAlloc();
+  // Original 2 connections + 1 new (0 from 1, same level) = 3
+  EXPECT_EQ(CA.Size(), 3u);
+}
+
+struct LargeNeighbourhoodTraits : plastix::DefaultNetworkTraits<> {
+  using AddConn = AddConnToOutput;
+  static constexpr uint16_t Neighbourhood = 1024;
+};
+
+TEST(NeighbourhoodTest, LargeNeighbourhoodAllowsAllPairs) {
+  // Same behavior as unlimited — no filtering.
+  plastix::Network<LargeNeighbourhoodTraits> Net(2, FC{1});
+  std::array<float, 2> In = {2.0f, 3.0f};
+  Net.DoForwardPass(In);
+  EXPECT_FLOAT_EQ(Net.GetOutput()[0], 5.0f);
+
+  Net.DoAddConnections();
+  Net.DoForwardPass(In);
+  EXPECT_FLOAT_EQ(Net.GetOutput()[0], 6.0f);
+}
+
+struct FilteredNeighbourhoodTraits : plastix::DefaultNetworkTraits<> {
+  using AddConn = AddAllIncoming;
+  static constexpr uint16_t Neighbourhood = 1;
+};
+
+TEST(NeighbourhoodTest, NeighbourhoodFiltersDistantLevels) {
+  // 2 inputs (L0) -> 2 hidden (L1) -> 1 output (L2).
+  // Neighbourhood=1: input-to-output (distance 2) should be filtered.
+  plastix::Network<FilteredNeighbourhoodTraits> Net(2, FC{2}, FC{1});
+  size_t ConnsBefore = Net.GetConnAlloc().Size();
+
+  Net.DoAddConnections();
+
+  // Verify no new connection has level distance > 1.
+  auto &CA = Net.GetConnAlloc();
+  auto &UA = Net.GetUnitAlloc();
+  for (size_t C = ConnsBefore; C < CA.Size(); ++C) {
+    auto From = CA.Get<plastix::FromIdTag>(C);
+    auto To = CA.Get<plastix::ToIdTag>(C);
+    uint16_t FL = UA.Get<plastix::LevelTag>(From);
+    uint16_t TL = UA.Get<plastix::LevelTag>(To);
+    uint16_t Dist = (FL >= TL) ? (FL - TL) : (TL - FL);
+    EXPECT_LE(Dist, 1u);
+  }
+
+  // Also verify that some connections were added (policy is not vacuous).
+  EXPECT_GT(CA.Size(), ConnsBefore);
 }
 
 } // namespace plastix_test
