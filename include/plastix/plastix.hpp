@@ -252,45 +252,92 @@ public:
     else {
       using AC = typename Traits::AddConn;
       constexpr uint16_t N = Traits::Neighbourhood;
+      size_t NumUnits = UnitAlloc.Size();
 
-      // Phase 1: Collect proposals into scratch buffer.
+      // Phase 0: Build per-level unit index using KahnAlloc scratch.
+      // HighestLevel < NumUnits <= UnitAlloc.GetCapacity(), and
+      // KahnAlloc capacity = UnitAlloc.GetCapacity() + 1, so all
+      // level-indexed arrays fit.
+      uint32_t *LevelOffset = KahnAlloc.template GetArrayFor<InDegreeTag>();
+      uint32_t *UnitsByLevel = KahnAlloc.template GetArrayFor<FrontierTag>();
+      uint32_t *LevelWritePos = KahnAlloc.template GetArrayFor<OutOffsetTag>();
+
+      memset(LevelOffset, 0, (NumUnits + 1) * sizeof(uint32_t));
+      uint16_t HighestLevel = 0;
+      for (size_t I = 0; I < NumUnits; ++I) {
+        uint16_t Lvl = UnitAlloc.template Get<LevelTag>(I);
+        ++LevelOffset[Lvl];
+        if (Lvl > HighestLevel)
+          HighestLevel = Lvl;
+      }
+
+      uint32_t Sum = 0;
+      for (uint16_t L = 0; L <= HighestLevel; ++L) {
+        uint32_t Count = LevelOffset[L];
+        LevelOffset[L] = Sum;
+        Sum += Count;
+      }
+      LevelOffset[HighestLevel + 1] = Sum;
+
+      memcpy(LevelWritePos, LevelOffset, (HighestLevel + 1) * sizeof(uint32_t));
+      for (size_t I = 0; I < NumUnits; ++I) {
+        uint16_t Lvl = UnitAlloc.template Get<LevelTag>(I);
+        UnitsByLevel[LevelWritePos[Lvl]++] = static_cast<uint32_t>(I);
+      }
+
+      // Phase 1: Collect proposals via rolling level-pair window.
       CompactEdge *Props = ProposalAlloc.template GetArrayFor<ProposalTag>();
       size_t NumProposals = 0;
       size_t MaxProposals = ProposalAlloc.GetCapacity();
-      size_t NumUnits = UnitAlloc.Size();
 
-      for (size_t Self = 0; Self < NumUnits; ++Self) {
-        uint16_t SelfLevel = UnitAlloc.template Get<LevelTag>(Self);
-        for (size_t Other = 0; Other < NumUnits; ++Other) {
-          if (Self == Other)
-            continue;
+      // Process one level-pair (La <= Lb). For cross-level pairs,
+      // queries both (U,V) and (V,U) perspectives to match the
+      // original all-pairs semantics.
+      auto ProcessLevelPair = [&](uint16_t La, uint16_t Lb) {
+        for (uint32_t Ai = LevelOffset[La]; Ai < LevelOffset[La + 1]; ++Ai) {
+          uint32_t U = UnitsByLevel[Ai];
+          for (uint32_t Bi = LevelOffset[Lb]; Bi < LevelOffset[Lb + 1]; ++Bi) {
+            uint32_t V = UnitsByLevel[Bi];
+            if (U == V)
+              continue;
 
-          uint16_t OtherLevel = UnitAlloc.template Get<LevelTag>(Other);
-          uint16_t Dist = (SelfLevel >= OtherLevel) ? (SelfLevel - OtherLevel)
-                                                    : (OtherLevel - SelfLevel);
-          if (Dist > N)
-            continue;
+            if (NumProposals < MaxProposals &&
+                AC::ShouldAddIncomingConnection(UnitAlloc, U, V, Globals))
+              Props[NumProposals++] = {V, U};
+            if (NumProposals < MaxProposals &&
+                AC::ShouldAddOutgoingConnection(UnitAlloc, U, V, Globals))
+              Props[NumProposals++] = {U, V};
 
-          if (NumProposals < MaxProposals &&
-              AC::ShouldAddIncomingConnection(UnitAlloc, Self, Other,
-                                              Globals)) {
-            Props[NumProposals++] = {static_cast<uint32_t>(Other),
-                                     static_cast<uint32_t>(Self)};
-          }
-
-          if (NumProposals < MaxProposals &&
-              AC::ShouldAddOutgoingConnection(UnitAlloc, Self, Other,
-                                              Globals)) {
-            Props[NumProposals++] = {static_cast<uint32_t>(Self),
-                                     static_cast<uint32_t>(Other)};
+            if (La != Lb) {
+              if (NumProposals < MaxProposals &&
+                  AC::ShouldAddIncomingConnection(UnitAlloc, V, U, Globals))
+                Props[NumProposals++] = {U, V};
+              if (NumProposals < MaxProposals &&
+                  AC::ShouldAddOutgoingConnection(UnitAlloc, V, U, Globals))
+                Props[NumProposals++] = {V, U};
+            }
           }
         }
+      };
+
+      // Initial window [0, min(N, HighestLevel)].
+      uint16_t InitRight = (N <= HighestLevel) ? N : HighestLevel;
+      for (uint16_t La = 0; La <= InitRight; ++La)
+        for (uint16_t Lb = La; Lb <= InitRight; ++Lb)
+          ProcessLevelPair(La, Lb);
+
+      // Roll the window: each step adds one new right-edge level
+      // and pairs it with everything in the current window.
+      for (uint16_t NewRight = N + 1; NewRight <= HighestLevel; ++NewRight) {
+        uint16_t Left = NewRight - N;
+        for (uint16_t WinLevel = Left; WinLevel <= NewRight; ++WinLevel)
+          ProcessLevelPair(WinLevel, NewRight);
       }
 
       if (NumProposals == 0)
         return;
 
-      // Phase 2: Sort proposals by packed (From, To) bits and deduplicate.
+      // Phase 2: Sort proposals by packed (From, To) bits.
       std::sort(Props, Props + NumProposals,
                 [](const CompactEdge &A, const CompactEdge &B) {
                   return A.Bits < B.Bits;
