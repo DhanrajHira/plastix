@@ -44,14 +44,23 @@ using KahnScratchAllocator =
                         alloc::SOAField<FrontierTag, uint32_t>,
                         alloc::SOAField<NextFrontierTag, uint32_t>>;
 
-struct ProposalFromTag {};
-struct ProposalToTag {};
+struct CompactEdge {
+  uint64_t Bits;
+
+  CompactEdge() : Bits(0) {}
+  CompactEdge(uint32_t From, uint32_t To)
+      : Bits(static_cast<uint64_t>(From) | (static_cast<uint64_t>(To) << 32)) {}
+
+  uint32_t From() const { return static_cast<uint32_t>(Bits); }
+  uint32_t To() const { return static_cast<uint32_t>(Bits >> 32); }
+};
+
+struct ProposalTag {};
 struct ProposalEntity {};
 
 using ProposalScratchAllocator =
     alloc::SOAAllocator<ProposalEntity,
-                        alloc::SOAField<ProposalFromTag, uint32_t>,
-                        alloc::SOAField<ProposalToTag, uint32_t>>;
+                        alloc::SOAField<ProposalTag, CompactEdge>>;
 
 template <NetworkTraits Traits> class Network {
   using UnitAllocator = UnitAllocFor<Traits>;
@@ -245,9 +254,7 @@ public:
       constexpr uint16_t N = Traits::Neighbourhood;
 
       // Phase 1: Collect proposals into scratch buffer.
-      uint32_t *PropFrom =
-          ProposalAlloc.template GetArrayFor<ProposalFromTag>();
-      uint32_t *PropTo = ProposalAlloc.template GetArrayFor<ProposalToTag>();
+      CompactEdge *Props = ProposalAlloc.template GetArrayFor<ProposalTag>();
       size_t NumProposals = 0;
       size_t MaxProposals = ProposalAlloc.GetCapacity();
       size_t NumUnits = UnitAlloc.Size();
@@ -267,17 +274,15 @@ public:
           if (NumProposals < MaxProposals &&
               AC::ShouldAddIncomingConnection(UnitAlloc, Self, Other,
                                               Globals)) {
-            PropFrom[NumProposals] = static_cast<uint32_t>(Other);
-            PropTo[NumProposals] = static_cast<uint32_t>(Self);
-            ++NumProposals;
+            Props[NumProposals++] = {static_cast<uint32_t>(Other),
+                                     static_cast<uint32_t>(Self)};
           }
 
           if (NumProposals < MaxProposals &&
               AC::ShouldAddOutgoingConnection(UnitAlloc, Self, Other,
                                               Globals)) {
-            PropFrom[NumProposals] = static_cast<uint32_t>(Self);
-            PropTo[NumProposals] = static_cast<uint32_t>(Other);
-            ++NumProposals;
+            Props[NumProposals++] = {static_cast<uint32_t>(Self),
+                                     static_cast<uint32_t>(Other)};
           }
         }
       }
@@ -285,29 +290,22 @@ public:
       if (NumProposals == 0)
         return;
 
-      // Phase 2: Sort proposals by (From, To) and deduplicate.
-      size_t *Perm = ProposalAlloc.PermutationScratch();
-      for (size_t I = 0; I < NumProposals; ++I)
-        Perm[I] = I;
-
-      std::sort(Perm, Perm + NumProposals, [&](size_t A, size_t B) {
-        if (PropFrom[A] != PropFrom[B])
-          return PropFrom[A] < PropFrom[B];
-        return PropTo[A] < PropTo[B];
-      });
+      // Phase 2: Sort proposals by packed (From, To) bits and deduplicate.
+      std::sort(Props, Props + NumProposals,
+                [](const CompactEdge &A, const CompactEdge &B) {
+                  return A.Bits < B.Bits;
+                });
 
       // Phase 3: Commit unique proposals.
       size_t SizeBefore = ConnAlloc.Size();
-      uint32_t PrevFrom = UINT32_MAX, PrevTo = UINT32_MAX;
+      uint64_t Prev = UINT64_MAX;
       for (size_t I = 0; I < NumProposals; ++I) {
-        size_t Idx = Perm[I];
-        uint32_t F = PropFrom[Idx];
-        uint32_t T = PropTo[Idx];
-        if (F == PrevFrom && T == PrevTo)
+        if (Props[I].Bits == Prev)
           continue;
-        PrevFrom = F;
-        PrevTo = T;
+        Prev = Props[I].Bits;
 
+        uint32_t F = Props[I].From();
+        uint32_t T = Props[I].To();
         auto ConnId = ConnAlloc.Allocate();
         ConnAlloc.template Get<FromIdTag>(ConnId) = F;
         ConnAlloc.template Get<ToIdTag>(ConnId) = T;
