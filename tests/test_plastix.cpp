@@ -985,4 +985,48 @@ TEST(NeighbourhoodTest, NeighbourhoodFiltersDistantLevels) {
   EXPECT_GT(CA.Size(), ConnsBefore);
 }
 
+// ---------------------------------------------------------------------------
+// Deduplication tests
+// ---------------------------------------------------------------------------
+
+// Policy that proposes 1→0 via both incoming AND outgoing paths.
+// Incoming: unit 0 accepts from unit 1 => (From=1, To=0).
+// Outgoing: unit 1 sends to unit 0 => (From=1, To=0).
+// Same edge proposed twice — should be deduplicated to one connection.
+struct AddDuplicateEdge {
+  static bool ShouldAddIncomingConnection(auto &, size_t Self, size_t Candidate,
+                                          auto &) {
+    return Self == 0 && Candidate == 1;
+  }
+  static bool ShouldAddOutgoingConnection(auto &, size_t Self, size_t Candidate,
+                                          auto &) {
+    return Self == 1 && Candidate == 0;
+  }
+  static void InitConnection(auto &, size_t, size_t, auto &C, size_t ConnId,
+                             auto &) {
+    C.template Get<plastix::WeightTag>(ConnId) = 0.25f;
+  }
+};
+
+struct DedupTraits : plastix::DefaultNetworkTraits<> {
+  using AddConn = AddDuplicateEdge;
+};
+
+TEST(DeduplicationTest, DuplicateProposalsDeduped) {
+  // 2 inputs (0,1) + 1 output (2). Both incoming and outgoing propose 1→0.
+  plastix::Network<DedupTraits> Net(2, 1);
+  EXPECT_EQ(Net.GetConnAlloc().Size(), 2u);
+
+  Net.DoAddConnections();
+
+  // Should add exactly 1 connection (the duplicate is removed).
+  EXPECT_EQ(Net.GetConnAlloc().Size(), 3u);
+
+  // Verify the new connection is 1→0.
+  auto &CA = Net.GetConnAlloc();
+  EXPECT_EQ(CA.Get<plastix::FromIdTag>(2), 1u);
+  EXPECT_EQ(CA.Get<plastix::ToIdTag>(2), 0u);
+  EXPECT_FLOAT_EQ(CA.Get<plastix::WeightTag>(2), 0.25f);
+}
+
 } // namespace plastix_test
