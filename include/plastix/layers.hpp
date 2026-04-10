@@ -6,13 +6,19 @@
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
+#include <ranges>
+#include <utility>
 
 namespace plastix {
 
 struct UnitRange {
   size_t Begin;
   size_t End;
+  UnitRange() = default;
+  UnitRange(size_t Begin, size_t End) : Begin(Begin), End(End) {}
+  UnitRange(std::pair<size_t, size_t> P) : Begin(P.first), End(P.second) {}
   size_t Size() const { return End - Begin; }
+  auto Ids() const { return std::views::iota(Begin, End); }
 };
 
 template <typename B, typename UA, typename CA>
@@ -37,18 +43,16 @@ struct FullyConnected {
   template <typename UnitAlloc, typename ConnAlloc>
   UnitRange operator()(UnitAlloc &UA, ConnAlloc &CA,
                        UnitRange PrevLayer) const {
-    size_t Begin = UA.Size();
-
     uint16_t NewLevel = UA.template Get<LevelTag>(PrevLayer.Begin) + 1;
-    for (size_t I = 0; I < NumUnits; ++I) {
-      auto Id = UA.Allocate();
+    UnitRange Units = UA.AllocateMany(NumUnits);
+    for (auto Id : Units.Ids()) {
       UA.template Get<LevelTag>(Id) = NewLevel;
       InitUnit(UA, Id);
     }
 
     uint16_t SrcLevel = UA.template Get<LevelTag>(PrevLayer.Begin);
-    for (size_t U = Begin; U < Begin + NumUnits; ++U) {
-      for (size_t Src = PrevLayer.Begin; Src < PrevLayer.End; ++Src) {
+    for (auto U : Units.Ids()) {
+      for (auto Src : PrevLayer.Ids()) {
         auto ConnId = CA.Allocate();
         CA.template Get<ToIdTag>(ConnId) = static_cast<uint32_t>(U);
         CA.template Get<FromIdTag>(ConnId) = static_cast<uint32_t>(Src);
@@ -56,7 +60,7 @@ struct FullyConnected {
         InitConn(CA, ConnId);
       }
     }
-    return {Begin, Begin + NumUnits};
+    return Units;
   }
 };
 
