@@ -80,7 +80,8 @@ public:
     UnitRange Prev{0, InputDim};
     ((Prev = Layers(UnitAlloc, ConnAlloc, Prev)), ...);
     OutputRange = Prev;
-    SortConnectionsByLevel();
+    if constexpr (Traits::Model == Propagation::Topological)
+      SortConnectionsByLevel();
   }
 
   Network(size_t InputDim, size_t OutputDim = 1)
@@ -89,17 +90,38 @@ public:
   size_t GetStep() const { return Step; }
 
   void DoForwardPass(std::span<const float> Inputs) {
-    if (NeedsResort)
-      SortConnectionsByLevel();
-
     using FP = typename Traits::ForwardPass;
     using Acc = typename FP::Accumulator;
 
     for (size_t I = 0; I < NumInput; ++I)
       UnitAlloc.template Get<ActivationTag>(I) = Inputs[I];
 
-    for (uint16_t L = 1; L <= NumLevels; ++L) {
-      for (uint32_t C = Ranges[L - 1].Begin; C < Ranges[L - 1].End; ++C) {
+    if constexpr (Traits::Model == Propagation::Topological) {
+      if (NeedsResort)
+        SortConnectionsByLevel();
+
+      for (uint16_t L = 1; L <= NumLevels; ++L) {
+        for (uint32_t C = Ranges[L - 1].Begin; C < Ranges[L - 1].End; ++C) {
+          if (ConnAlloc.template Get<DeadTag>(C))
+            continue;
+          auto ToId = ConnAlloc.template Get<ToIdTag>(C);
+          auto FromId = ConnAlloc.template Get<FromIdTag>(C);
+          auto &UAcc = UnitAlloc.template Get<ForwardAccTag>(ToId);
+          UAcc = FP::Combine(
+              UAcc, FP::Map(UnitAlloc, ToId, FromId, ConnAlloc, C, Globals));
+        }
+
+        size_t NumUnits = UnitAlloc.Size();
+        for (size_t I = NumInput; I < NumUnits; ++I) {
+          if (UnitAlloc.template Get<LevelTag>(I) == L) {
+            auto &UAcc = UnitAlloc.template Get<ForwardAccTag>(I);
+            FP::Apply(UnitAlloc, I, Globals, UAcc);
+            UAcc = Acc{};
+          }
+        }
+      }
+    } else {
+      for (size_t C = 0; C < ConnAlloc.Size(); ++C) {
         if (ConnAlloc.template Get<DeadTag>(C))
           continue;
         auto ToId = ConnAlloc.template Get<ToIdTag>(C);
@@ -111,11 +133,9 @@ public:
 
       size_t NumUnits = UnitAlloc.Size();
       for (size_t I = NumInput; I < NumUnits; ++I) {
-        if (UnitAlloc.template Get<LevelTag>(I) == L) {
-          auto &UAcc = UnitAlloc.template Get<ForwardAccTag>(I);
-          FP::Apply(UnitAlloc, I, Globals, UAcc);
-          UAcc = Acc{};
-        }
+        auto &UAcc = UnitAlloc.template Get<ForwardAccTag>(I);
+        FP::Apply(UnitAlloc, I, Globals, UAcc);
+        UAcc = Acc{};
       }
     }
 
@@ -129,8 +149,29 @@ public:
       using BP = typename Traits::BackwardPass;
       using Acc = typename BP::Accumulator;
 
-      for (uint16_t L = NumLevels; L >= 1; --L) {
-        for (uint32_t C = Ranges[L].Begin; C < Ranges[L].End; ++C) {
+      if constexpr (Traits::Model == Propagation::Topological) {
+        for (uint16_t L = NumLevels; L >= 1; --L) {
+          for (uint32_t C = Ranges[L].Begin; C < Ranges[L].End; ++C) {
+            if (ConnAlloc.template Get<DeadTag>(C))
+              continue;
+            auto ToId = ConnAlloc.template Get<ToIdTag>(C);
+            auto FromId = ConnAlloc.template Get<FromIdTag>(C);
+            auto &UAcc = UnitAlloc.template Get<BackwardAccTag>(FromId);
+            UAcc = BP::Combine(
+                UAcc, BP::Map(UnitAlloc, FromId, ToId, ConnAlloc, C, Globals));
+          }
+
+          size_t NumUnits = UnitAlloc.Size();
+          for (size_t I = NumInput; I < NumUnits; ++I) {
+            if (UnitAlloc.template Get<LevelTag>(I) == L) {
+              auto &UAcc = UnitAlloc.template Get<BackwardAccTag>(I);
+              BP::Apply(UnitAlloc, I, Globals, UAcc);
+              UAcc = Acc{};
+            }
+          }
+        }
+      } else {
+        for (size_t C = ConnAlloc.Size(); C-- > 0;) {
           if (ConnAlloc.template Get<DeadTag>(C))
             continue;
           auto ToId = ConnAlloc.template Get<ToIdTag>(C);
@@ -141,12 +182,10 @@ public:
         }
 
         size_t NumUnits = UnitAlloc.Size();
-        for (size_t I = NumInput; I < NumUnits; ++I) {
-          if (UnitAlloc.template Get<LevelTag>(I) == L) {
-            auto &UAcc = UnitAlloc.template Get<BackwardAccTag>(I);
-            BP::Apply(UnitAlloc, I, Globals, UAcc);
-            UAcc = Acc{};
-          }
+        for (size_t I = 0; I < NumUnits; ++I) {
+          auto &UAcc = UnitAlloc.template Get<BackwardAccTag>(I);
+          BP::Apply(UnitAlloc, I, Globals, UAcc);
+          UAcc = Acc{};
         }
       }
     }
@@ -380,8 +419,10 @@ public:
     DoPruneConnections();
     DoAddUnits();
     DoAddConnections();
-    if (NeedsResort)
-      SortConnectionsByLevel();
+    if constexpr (Traits::Model == Propagation::Topological) {
+      if (NeedsResort)
+        SortConnectionsByLevel();
+    }
   }
 
   std::span<const float> GetOutput() const {

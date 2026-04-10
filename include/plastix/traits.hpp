@@ -10,6 +10,12 @@
 namespace plastix {
 
 // ---------------------------------------------------------------------------
+// Propagation model
+// ---------------------------------------------------------------------------
+
+enum class Propagation { Topological, Pipeline };
+
+// ---------------------------------------------------------------------------
 // Policy concepts
 // ---------------------------------------------------------------------------
 
@@ -162,6 +168,7 @@ template <typename Global = EmptyGlobalState> struct DefaultNetworkTraits {
   using ExtraUnitFields = UnitFieldList<>;
   using ExtraConnFields = ConnFieldList<alloc::SOAField<WeightTag, float>>;
   static constexpr uint16_t Neighbourhood = 1;
+  static constexpr Propagation Model = Propagation::Topological;
 };
 
 // ---------------------------------------------------------------------------
@@ -196,6 +203,7 @@ concept NetworkTraits =
       typename T::ExtraUnitFields;
       typename T::ExtraConnFields;
       { T::Neighbourhood } -> std::convertible_to<uint16_t>;
+      { T::Model } -> std::convertible_to<Propagation>;
     } &&
     PassPolicy<typename T::ForwardPass, UnitAllocFor<T>, ConnAllocFor<T>,
                typename T::GlobalState> &&
