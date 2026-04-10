@@ -82,6 +82,27 @@ public:
     return Id;
   };
 
+  std::pair<size_t, size_t> AllocateMany(size_t N) {
+    size_t Begin = Count.fetch_add(N);
+    if (Begin + N > Capacity) {
+      Count.fetch_sub(N);
+      return {static_cast<size_t>(-1), static_cast<size_t>(-1)};
+    }
+    for (size_t Id = Begin; Id < Begin + N; ++Id) {
+      std::apply(
+          [Id](auto &...Ptrs) {
+            ((::new (&Ptrs[Id]) typename Fields::Type()), ...);
+          },
+          FieldPtrs);
+      std::apply(
+          [Id](auto &...Ptrs) {
+            ((::new (&Ptrs[Id]) typename Fields::Type()), ...);
+          },
+          BackFieldPtrs);
+    }
+    return {Begin, Begin + N};
+  }
+
   template <typename FieldTag> auto &Get(AllocId<T> Id) {
     constexpr auto Index = IndexOf<FieldTag>();
     const auto &Field = std::get<Index>(FieldPtrs);
