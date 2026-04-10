@@ -604,11 +604,11 @@ TEST(PruneTest, DoStepWithPrune) {
 // AddUnit tests
 // ---------------------------------------------------------------------------
 
-// Policy that adds a new unit at level 5 for unit 0 only.
+// Policy that adds a new unit 1 level above the current unit, for unit 0 only.
 struct AddOneUnit {
-  static std::optional<uint16_t> AddUnit(auto &, size_t Id, auto &) {
+  static std::optional<int16_t> AddUnit(auto &, size_t Id, auto &) {
     if (Id == 0)
-      return uint16_t{5};
+      return int16_t{1};
     return std::nullopt;
   }
 };
@@ -625,17 +625,17 @@ TEST(AddUnitTest, NoopDoesNotAddUnits) {
   EXPECT_EQ(Net.GetUnitAlloc().Size(), 3u);
 }
 
-TEST(AddUnitTest, AddsUnitAtReturnedLevel) {
-  // AddOneUnit returns level 5 for unit 0 only => 1 new unit.
+TEST(AddUnitTest, AddsUnitAtOffsetLevel) {
+  // AddOneUnit returns offset +1 for unit 0 (level 0) => new unit at level 1.
   plastix::Network<AddUnitTraits> Net(2, 1);
   EXPECT_EQ(Net.GetUnitAlloc().Size(), 3u);
 
   Net.DoAddUnits();
   EXPECT_EQ(Net.GetUnitAlloc().Size(), 4u);
 
-  // New unit (id=3) should be at level 5.
+  // New unit (id=3) should be at level 0 + 1 = 1.
   auto &UA = Net.GetUnitAlloc();
-  EXPECT_EQ(UA.Get<plastix::LevelTag>(3), uint16_t{5});
+  EXPECT_EQ(UA.Get<plastix::LevelTag>(3), uint16_t{1});
 }
 
 TEST(AddUnitTest, NulloptReturnDoesNotAdd) {
@@ -667,6 +667,49 @@ TEST(AddUnitTest, NewUnitDefaultActivation) {
   auto &UA = Net.GetUnitAlloc();
   EXPECT_FLOAT_EQ(UA.Get<plastix::ActivationTag>(3), 0.0f);
   EXPECT_FALSE(UA.Get<plastix::PrunedTag>(3));
+}
+
+// Policy that returns a large negative offset to test clamping to level 1.
+struct AddUnitNegativeOffset {
+  static std::optional<int16_t> AddUnit(auto &, size_t Id, auto &) {
+    if (Id == 0)
+      return int16_t{-100};
+    return std::nullopt;
+  }
+};
+
+struct AddUnitNegativeTraits : plastix::DefaultNetworkTraits<> {
+  using AddUnit = AddUnitNegativeOffset;
+};
+
+TEST(AddUnitTest, NegativeOffsetClampedToLevelOne) {
+  // Unit 0 is at level 0, offset -100 should clamp to level 1.
+  plastix::Network<AddUnitNegativeTraits> Net(2, 1);
+  Net.DoAddUnits();
+  EXPECT_EQ(Net.GetUnitAlloc().Size(), 4u);
+  EXPECT_EQ(Net.GetUnitAlloc().Get<plastix::LevelTag>(3), uint16_t{1});
+}
+
+// Policy that returns a huge positive offset to test clamping to MaxLevels-1.
+struct AddUnitHugeOffset {
+  static std::optional<int16_t> AddUnit(auto &, size_t Id, auto &) {
+    if (Id == 0)
+      return int16_t{10000};
+    return std::nullopt;
+  }
+};
+
+struct AddUnitHugeTraits : plastix::DefaultNetworkTraits<> {
+  using AddUnit = AddUnitHugeOffset;
+};
+
+TEST(AddUnitTest, LargeOffsetClampedToMaxLevel) {
+  // Unit 0 is at level 0, offset +10000 should clamp to MaxLevels - 1.
+  plastix::Network<AddUnitHugeTraits> Net(2, 1);
+  Net.DoAddUnits();
+  EXPECT_EQ(Net.GetUnitAlloc().Size(), 4u);
+  EXPECT_EQ(Net.GetUnitAlloc().Get<plastix::LevelTag>(3),
+            uint16_t{plastix::MaxLevels - 1});
 }
 
 // ---------------------------------------------------------------------------
