@@ -60,7 +60,7 @@ concept PruneConnPolicy = requires(UnitAlloc &U, size_t DstId, size_t SrcId,
 
 template <typename P, typename UnitAlloc, typename Global>
 concept AddUnitPolicy = requires(UnitAlloc &U, size_t Id, Global &G) {
-  { P::AddUnit(U, Id, G) } -> std::same_as<std::optional<uint16_t>>;
+  { P::AddUnit(U, Id, G) } -> std::same_as<std::optional<int16_t>>;
 };
 
 template <typename P, typename UnitAlloc, typename ConnAlloc, typename Global>
@@ -128,7 +128,7 @@ struct NoPruneConn {
 };
 
 struct NoAddUnit {
-  static std::optional<uint16_t> AddUnit(auto &, size_t, auto &) {
+  static std::optional<int16_t> AddUnit(auto &, size_t, auto &) {
     return std::nullopt;
   }
 };

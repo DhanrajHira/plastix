@@ -238,10 +238,15 @@ public:
       using AP = typename Traits::AddUnit;
       size_t NumUnits = UnitAlloc.Size();
       for (size_t I = 0; I < NumUnits; ++I) {
-        auto Level = AP::AddUnit(UnitAlloc, I, Globals);
-        if (Level.has_value()) {
+        auto Offset = AP::AddUnit(UnitAlloc, I, Globals);
+        if (Offset.has_value()) {
+          int32_t Base = UnitAlloc.template Get<LevelTag>(I);
+          int32_t NewLevel =
+              std::clamp(Base + static_cast<int32_t>(*Offset), int32_t{1},
+                         static_cast<int32_t>(MaxLevels - 1));
           auto NewId = UnitAlloc.Allocate();
-          UnitAlloc.template Get<LevelTag>(NewId) = *Level;
+          UnitAlloc.template Get<LevelTag>(NewId) =
+              static_cast<uint16_t>(NewLevel);
         }
       }
     }
