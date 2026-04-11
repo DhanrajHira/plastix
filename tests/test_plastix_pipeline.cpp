@@ -616,6 +616,7 @@ struct AddOneUnit {
       return int16_t{1};
     return std::nullopt;
   }
+  static void InitUnit(auto &, size_t, size_t, auto &) {}
 };
 
 struct AddUnitTraits : plastix::DefaultNetworkTraits<> {

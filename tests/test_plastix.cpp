@@ -611,6 +611,7 @@ struct AddOneUnit {
       return int16_t{1};
     return std::nullopt;
   }
+  static void InitUnit(auto &, size_t, size_t, auto &) {}
 };
 
 struct AddUnitTraits : plastix::DefaultNetworkTraits<> {
@@ -676,6 +677,7 @@ struct AddUnitNegativeOffset {
       return int16_t{-100};
     return std::nullopt;
   }
+  static void InitUnit(auto &, size_t, size_t, auto &) {}
 };
 
 struct AddUnitNegativeTraits : plastix::DefaultNetworkTraits<> {
@@ -697,6 +699,7 @@ struct AddUnitHugeOffset {
       return int16_t{10000};
     return std::nullopt;
   }
+  static void InitUnit(auto &, size_t, size_t, auto &) {}
 };
 
 struct AddUnitHugeTraits : plastix::DefaultNetworkTraits<> {
@@ -710,6 +713,57 @@ TEST(AddUnitTest, LargeOffsetClampedToMaxLevel) {
   EXPECT_EQ(Net.GetUnitAlloc().Size(), 4u);
   EXPECT_EQ(Net.GetUnitAlloc().Get<plastix::LevelTag>(3),
             uint16_t{plastix::MaxLevels - 1});
+}
+
+// Policy that initializes new units by copying the parent's activation and
+// marking them with a sentinel value. Tests the InitUnit hook.
+struct AddUnitCopyParent {
+  static std::optional<int16_t> AddUnit(auto &, size_t Id, auto &) {
+    if (Id == 0)
+      return int16_t{1};
+    return std::nullopt;
+  }
+  static void InitUnit(auto &U, size_t NewId, size_t ParentId, auto &) {
+    U.template Get<plastix::ActivationTag>(NewId) =
+        U.template Get<plastix::ActivationTag>(ParentId) + 1.0f;
+  }
+};
+
+struct AddUnitCopyParentTraits : plastix::DefaultNetworkTraits<> {
+  using AddUnit = AddUnitCopyParent;
+};
+
+TEST(AddUnitTest, InitUnitRunsAfterAllocationWithParentId) {
+  // Seed unit 0's activation so we can verify InitUnit sees the parent state.
+  plastix::Network<AddUnitCopyParentTraits> Net(2, 1);
+  auto &UA = Net.GetUnitAlloc();
+  UA.Get<plastix::ActivationTag>(0) = 4.5f;
+
+  Net.DoAddUnits();
+  ASSERT_EQ(UA.Size(), 4u);
+
+  // Level should still be set (clamped offset +1 from level 0 = 1).
+  EXPECT_EQ(UA.Get<plastix::LevelTag>(3), uint16_t{1});
+  // InitUnit should have read parent (id 0) activation and written parent+1.
+  EXPECT_FLOAT_EQ(UA.Get<plastix::ActivationTag>(3), 5.5f);
+}
+
+TEST(AddUnitTest, InitUnitNotCalledWhenOffsetIsNullopt) {
+  // Only unit 0 returns an offset; other units return nullopt, so InitUnit
+  // must not fire for them (and only one new unit should exist).
+  plastix::Network<AddUnitCopyParentTraits> Net(2, 1);
+  auto &UA = Net.GetUnitAlloc();
+  UA.Get<plastix::ActivationTag>(0) = 0.0f;
+  UA.Get<plastix::ActivationTag>(1) = 99.0f;
+  UA.Get<plastix::ActivationTag>(2) = 99.0f;
+
+  Net.DoAddUnits();
+  ASSERT_EQ(UA.Size(), 4u);
+
+  // The single new unit's parent is unit 0 (activation 0), so the new
+  // activation is 1.0. If InitUnit had fired for unit 1 or 2, we'd see
+  // 100.0 somewhere.
+  EXPECT_FLOAT_EQ(UA.Get<plastix::ActivationTag>(3), 1.0f);
 }
 
 // ---------------------------------------------------------------------------

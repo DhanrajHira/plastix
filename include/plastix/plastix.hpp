@@ -286,6 +286,7 @@ public:
           auto NewId = UnitAlloc.Allocate();
           UnitAlloc.template Get<LevelTag>(NewId) =
               static_cast<uint16_t>(NewLevel);
+          AP::InitUnit(UnitAlloc, NewId, I, Globals);
         }
       }
     }
