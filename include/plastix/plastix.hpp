@@ -171,10 +171,16 @@ public:
     ++Step;
   }
 
-  // Runs one backward pass using the same two-phase structure as DoForwardPass
-  // but in reverse signal direction: BP::Map accumulates into BackwardAccTag
-  // on the *source* unit, then BP::CalculateAndApply fires per unit.
-  // Compiled out entirely when BackwardPass = NoBackwardPass.
+  void DoCalculateLoss(std::span<const float> Targets) {
+    if constexpr (std::is_same_v<typename Traits::Loss, NoLoss>)
+      return;
+    else {
+      if (Targets.empty())
+        return;
+      Traits::Loss::CalculateLoss(UnitAlloc, OutputRange, Targets, Globals);
+    }
+  }
+
   void DoBackwardPass() {
     if constexpr (std::is_same_v<typename Traits::BackwardPass, NoBackwardPass>)
       return;
@@ -470,12 +476,10 @@ public:
     }
   }
 
-  // Runs the full per-step pipeline in order:
-  // ForwardPass → BackwardPass → UpdateUnit → UpdateConn → PruneUnits →
-  // PruneConnections → AddUnits → AddConnections.
-  // Noop-policy steps compile to nothing.
-  void DoStep(std::span<const float> Inputs) {
+  void DoStep(std::span<const float> Inputs,
+              std::span<const float> Targets = {}) {
     DoForwardPass(Inputs);
+    DoCalculateLoss(Targets);
     DoBackwardPass();
     DoAddUnits();
     DoAddConnections();

@@ -24,18 +24,17 @@ struct LinearForwardPass {
   }
 };
 
-// Per-connection weight update: w += lr * error * input.
-// The error for the destination unit is staged by the outer loop into
-// BackwardAcc(OutputId); the source activation still holds the input
-// value from the forward pass, so we can read it directly off the
-// source unit — no dedicated "update accumulator" field needed.
+// Per-connection weight update: w -= lr * grad * input.
+// MSELoss staged dL/dpred = (pred - target) into BackwardAcc(DstId) during
+// DoCalculateLoss; the source activation still holds the input value from
+// the forward pass, so we read it directly off the source unit.
 struct GradientDescentConn {
   static void UpdateIncomingConnection(auto &U, size_t DstId, size_t SrcId,
                                        auto &C, size_t ConnId, auto &) {
-    float Error = plastix::GetField<plastix::BackwardAccTag>(U, DstId);
+    float Grad = plastix::GetField<plastix::BackwardAccTag>(U, DstId);
     float Input = plastix::GetField<plastix::ActivationTag>(U, SrcId);
-    plastix::GetField<plastix::WeightTag>(C, ConnId) +=
-        LearningRate * Error * Input;
+    plastix::GetField<plastix::WeightTag>(C, ConnId) -=
+        LearningRate * Grad * Input;
   }
 
   static void UpdateOutgoingConnection(auto &, size_t, size_t, auto &, size_t,
@@ -44,6 +43,7 @@ struct GradientDescentConn {
 
 struct LRTraits : plastix::DefaultNetworkTraits<> {
   using ForwardPass = LinearForwardPass;
+  using Loss = plastix::MSELoss;
   using UpdateConn = GradientDescentConn;
 };
 
@@ -67,23 +67,17 @@ int main() {
 
   constexpr size_t NumSteps = 2000;
   constexpr size_t PrintInterval = 200;
-  constexpr size_t OutputId = NumInputs; // Output unit follows inputs.
 
   float FinalLoss = 0.0f;
   for (size_t T = 0; T < NumSteps; ++T) {
     float X1 = Dist(Rng), X2 = Dist(Rng), X3 = Dist(Rng);
     float Y = 2.0f * X1 - 1.0f * X2 + 0.5f * X3;
     float Input[3] = {X1, X2, X3};
+    float Target[1] = {Y};
 
-    Net.DoForwardPass(Input);
+    Net.DoStep(Input, Target);
 
-    // Stage the error on the output unit for the update step to consume.
-    auto &U = Net.GetUnitAlloc();
     float Pred = Net.GetOutput()[0];
-    plastix::GetField<plastix::BackwardAccTag>(U, OutputId) = Y - Pred;
-
-    Net.DoUpdateConnectionState();
-
     float Loss = (Pred - Y) * (Pred - Y);
     if (T % PrintInterval == 0)
       std::cout << "Step " << std::setw(5) << T << "  error^2: " << std::setw(8)
