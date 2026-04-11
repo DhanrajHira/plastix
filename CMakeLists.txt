@@ -7,6 +7,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 option(PLASTIX_BUILD_TESTS "Build tests" ON)
 option(PLASTIX_BUILD_BENCHMARKS "Build benchmarks" ON)
+option(PLASTIX_BUILD_EXAMPLES "Build examples" ON)
 option(PLASTIX_ENABLE_CUDA "Enable CUDA support" OFF)
 
 add_library(plastix src/plastix.cpp)
@@ -44,6 +45,10 @@ if(PLASTIX_BUILD_TESTS)
     FetchContent_MakeAvailable(googletest)
     enable_testing()
     add_subdirectory(tests)
+endif()
+
+if(PLASTIX_BUILD_EXAMPLES)
+    add_subdirectory(examples)
 endif()
 
 if(PLASTIX_BUILD_BENCHMARKS)
