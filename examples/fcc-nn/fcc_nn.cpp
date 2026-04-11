@@ -1,63 +1,65 @@
 #include <plastix/plastix.hpp>
+
 #include <cmath>
+#include <iomanip>
 #include <iostream>
 #include <vector>
-#include <iomanip>
 
-// Simple Sigmoid activation function policy
+// Sigmoid forward pass: weighted sum of inputs, squashed through sigmoid.
 struct SigmoidForwardPass {
-    static float Map(auto&, size_t, auto&, float Weight, float Activation) {
-        return Weight * Activation;
-    }
+  using Accumulator = float;
 
-    static float CalculateAndApply(auto&, size_t, auto&, float Accumulated) {
-        return 1.0f / (1.0f + std::exp(-Accumulated));
-    }
+  static float Map(auto &U, size_t, size_t SrcId, auto &C, size_t ConnId,
+                   auto &) {
+    return C.template Get<plastix::WeightTag>(ConnId) *
+           U.template Get<plastix::ActivationTag>(SrcId);
+  }
+
+  static float Combine(float A, float B) { return A + B; }
+
+  static void Apply(auto &U, size_t Id, auto &, float Accumulated) {
+    U.template Get<plastix::ActivationTag>(Id) =
+        1.0f / (1.0f + std::exp(-Accumulated));
+  }
 };
 
-// Traits using our custom ForwardPass
-struct FccTraits : plastix::DefaultNetworkTraits<
-    plastix::UnitStateAllocator,
-    plastix::ConnStateAllocator
-> {
-    using ForwardPass = SigmoidForwardPass;
+struct FccTraits : plastix::DefaultNetworkTraits<> {
+  using ForwardPass = SigmoidForwardPass;
+};
+
+// Weight initializers for the FullyConnected layer builder.
+template <int Scaled> struct ConstWeightInit {
+  void operator()(auto &CA, auto Id) const {
+    CA.template Get<plastix::WeightTag>(Id) = Scaled / 100.0f;
+  }
 };
 
 using FccNetwork = plastix::Network<FccTraits>;
-using FC = plastix::FullyConnected;
+using HiddenLayer =
+    plastix::FullyConnected<plastix::NoUnitInit, ConstWeightInit<50>>;
+using OutputLayer =
+    plastix::FullyConnected<plastix::NoUnitInit, ConstWeightInit<-20>>;
 
 int main() {
-    std::cout << "Plastix FCC-NN Example" << std::endl;
-    std::cout << "======================" << std::endl;
+  std::cout << "Plastix FCC-NN Example\n";
+  std::cout << "======================\n";
 
-    // Create a simple network: 2 inputs -> 4 hidden -> 1 output
-    // We use different initial weights for variety
-    FccNetwork net(2, FC{4, 0.5f}, FC{1, -0.2f});
+  // 2 inputs -> 4 hidden -> 1 output. Default Topological propagation
+  // evaluates all levels in a single DoStep, so the output is ready after
+  // one call.
+  FccNetwork Net(2, HiddenLayer{4}, OutputLayer{1});
 
-    // Example inputs (XOR-like data)
-    std::vector<std::vector<float>> inputs = {
-        {0.0f, 0.0f},
-        {0.0f, 1.0f},
-        {1.0f, 0.0f},
-        {1.0f, 1.0f}
-    };
+  std::vector<std::vector<float>> Inputs = {
+      {0.0f, 0.0f}, {0.0f, 1.0f}, {1.0f, 0.0f}, {1.0f, 1.0f}};
 
-    std::cout << std::fixed << std::setprecision(4);
+  std::cout << std::fixed << std::setprecision(4);
 
-    // In a pipelined network, it takes N steps for the signal to reach the output,
-    // where N is the number of layers (including input).
-    // Here: Input -> Hidden (1 step) -> Output (2 steps)
+  for (const auto &In : Inputs) {
+    std::cout << "Input: [" << In[0] << ", " << In[1] << "] ";
+    Net.DoStep(In);
+    auto Output = Net.GetOutput();
+    std::cout << "=> Output: " << Output[0] << "\n";
+  }
 
-    for (const auto& in : inputs) {
-        std::cout << "Input: [" << in[0] << ", " << in[1] << "] ";
-
-        // Step 1: Input propagates to Hidden
-        net.DoStep(in);
-        net.DoStep(in);
-
-        auto output = net.GetOutput();
-        std::cout << "=> Output: " << output[0] << std::endl;
-    }
-
-    return 0;
+  return 0;
 }
