@@ -191,6 +191,14 @@ public:
     }
   }
 
+  void DoResetGlobalState() {
+    if constexpr (std::is_same_v<typename Traits::ResetGlobal,
+                                 NoResetGlobalState>)
+      return;
+    else
+      Traits::ResetGlobal::Reset(Globals);
+  }
+
   void DoUpdateUnitState() {
     if constexpr (std::is_same_v<typename Traits::UpdateUnit, NoUpdateUnit>)
       return;
@@ -424,6 +432,7 @@ public:
       if (NeedsResort)
         SortConnectionsByLevel();
     }
+    DoResetGlobalState();
   }
 
   std::span<const float> GetOutput() const {

@@ -86,6 +86,11 @@ concept AddConnPolicy =
       } -> std::same_as<void>;
     };
 
+template <typename P, typename Global>
+concept ResetGlobalStatePolicy = requires(Global &G) {
+  { P::Reset(G) } -> std::same_as<void>;
+};
+
 // ---------------------------------------------------------------------------
 // Default and noop policy implementations
 // ---------------------------------------------------------------------------
@@ -152,6 +157,10 @@ struct NoAddConn {
   static void InitConnection(auto &, size_t, size_t, auto &, size_t, auto &) {}
 };
 
+struct NoResetGlobalState {
+  static void Reset(auto &) {}
+};
+
 struct EmptyGlobalState {};
 
 // ---------------------------------------------------------------------------
@@ -168,6 +177,7 @@ template <typename Global = EmptyGlobalState> struct DefaultNetworkTraits {
   using PruneConn = NoPruneConn;
   using AddUnit = NoAddUnit;
   using AddConn = NoAddConn;
+  using ResetGlobal = NoResetGlobalState;
   using ExtraUnitFields = UnitFieldList<>;
   using ExtraConnFields = ConnFieldList<alloc::SOAField<WeightTag, float>>;
   static constexpr uint16_t Neighbourhood = 1;
@@ -203,6 +213,7 @@ concept NetworkTraits =
       typename T::PruneConn;
       typename T::AddUnit;
       typename T::AddConn;
+      typename T::ResetGlobal;
       typename T::ExtraUnitFields;
       typename T::ExtraConnFields;
       { T::Neighbourhood } -> std::convertible_to<uint16_t>;
@@ -223,7 +234,8 @@ concept NetworkTraits =
     AddUnitPolicy<typename T::AddUnit, UnitAllocFor<T>,
                   typename T::GlobalState> &&
     AddConnPolicy<typename T::AddConn, UnitAllocFor<T>, ConnAllocFor<T>,
-                  typename T::GlobalState>;
+                  typename T::GlobalState> &&
+    ResetGlobalStatePolicy<typename T::ResetGlobal, typename T::GlobalState>;
 
 } // namespace plastix
 
