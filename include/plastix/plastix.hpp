@@ -142,6 +142,16 @@ public:
     ++Step;
   }
 
+  void DoCalculateLoss(std::span<const float> Targets) {
+    if constexpr (std::is_same_v<typename Traits::Loss, NoLoss>)
+      return;
+    else {
+      if (Targets.empty())
+        return;
+      Traits::Loss::CalculateLoss(UnitAlloc, OutputRange, Targets, Globals);
+    }
+  }
+
   void DoBackwardPass() {
     if constexpr (std::is_same_v<typename Traits::BackwardPass, NoBackwardPass>)
       return;
@@ -419,8 +429,10 @@ public:
     }
   }
 
-  void DoStep(std::span<const float> Inputs) {
+  void DoStep(std::span<const float> Inputs,
+              std::span<const float> Targets = {}) {
     DoForwardPass(Inputs);
+    DoCalculateLoss(Targets);
     DoBackwardPass();
     DoUpdateUnitState();
     DoUpdateConnectionState();

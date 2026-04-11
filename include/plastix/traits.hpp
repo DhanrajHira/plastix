@@ -2,10 +2,14 @@
 #define PLASTIX_TRAITS_HPP
 
 #include "plastix/conn.hpp"
+#include "plastix/layers.hpp"
 #include "plastix/unit_state.hpp"
+#include <cmath>
 #include <concepts>
 #include <cstddef>
+#include <limits>
 #include <optional>
+#include <span>
 
 namespace plastix {
 
@@ -91,6 +95,12 @@ concept ResetGlobalStatePolicy = requires(Global &G) {
   { P::Reset(G) } -> std::same_as<void>;
 };
 
+template <typename P, typename UnitAlloc, typename Global>
+concept LossPolicy =
+    requires(UnitAlloc &U, UnitRange R, std::span<const float> T, Global &G) {
+      { P::CalculateLoss(U, R, T, G) } -> std::same_as<void>;
+    };
+
 // ---------------------------------------------------------------------------
 // Default and noop policy implementations
 // ---------------------------------------------------------------------------
@@ -160,6 +170,75 @@ struct NoResetGlobalState {
   static void Reset(auto &) {}
 };
 
+// Loss policies stage the upstream gradient dL/dActivation into
+// `BackwardAccTag` on each output unit, so the backward pass can propagate it
+// through the network. Convention: `BackwardAcc` holds the gradient with
+// respect to the output activation, and weight updates subtract
+// `learning_rate * grad * input`.
+struct NoLoss {
+  static void CalculateLoss(auto &, UnitRange, std::span<const float>, auto &) {
+  }
+};
+
+// Mean squared error: L = 0.5 * sum((pred - target)^2).
+// dL/dpred_i = pred_i - target_i.
+struct MSELoss {
+  static void CalculateLoss(auto &U, UnitRange Outputs,
+                            std::span<const float> Targets, auto &) {
+    size_t I = 0;
+    for (size_t Id : Outputs.Ids()) {
+      float Pred = GetField<ActivationTag>(U, Id);
+      GetField<BackwardAccTag>(U, Id) = Pred - Targets[I++];
+    }
+  }
+};
+
+// Root mean squared error: L = sqrt(mean((pred - target)^2)).
+// dL/dpred_i = (pred_i - target_i) / (N * L). Epsilon keeps the gradient
+// finite when predictions match targets exactly.
+struct RMSLoss {
+  static void CalculateLoss(auto &U, UnitRange Outputs,
+                            std::span<const float> Targets, auto &) {
+    float SumSq = 0.0f;
+    size_t I = 0;
+    for (size_t Id : Outputs.Ids()) {
+      float Diff = GetField<ActivationTag>(U, Id) - Targets[I++];
+      SumSq += Diff * Diff;
+    }
+    float N = static_cast<float>(Outputs.Size());
+    float Rms = std::sqrt(SumSq / N);
+    float Denom = N * (Rms + 1e-8f);
+    I = 0;
+    for (size_t Id : Outputs.Ids()) {
+      float Pred = GetField<ActivationTag>(U, Id);
+      GetField<BackwardAccTag>(U, Id) = (Pred - Targets[I++]) / Denom;
+    }
+  }
+};
+
+// Softmax over outputs + cross-entropy against a target distribution
+// (one-hot or soft). L = -sum target_i * log(softmax(pred)_i).
+// dL/dpred_i = softmax(pred)_i - target_i.
+struct SoftmaxCrossEntropyLoss {
+  static void CalculateLoss(auto &U, UnitRange Outputs,
+                            std::span<const float> Targets, auto &) {
+    float Max = -std::numeric_limits<float>::infinity();
+    for (size_t Id : Outputs.Ids()) {
+      float P = GetField<ActivationTag>(U, Id);
+      if (P > Max)
+        Max = P;
+    }
+    float Sum = 0.0f;
+    for (size_t Id : Outputs.Ids())
+      Sum += std::exp(GetField<ActivationTag>(U, Id) - Max);
+    size_t I = 0;
+    for (size_t Id : Outputs.Ids()) {
+      float Soft = std::exp(GetField<ActivationTag>(U, Id) - Max) / Sum;
+      GetField<BackwardAccTag>(U, Id) = Soft - Targets[I++];
+    }
+  }
+};
+
 struct EmptyGlobalState {};
 
 // ---------------------------------------------------------------------------
@@ -170,6 +249,7 @@ template <typename Global = EmptyGlobalState> struct DefaultNetworkTraits {
   using GlobalState = Global;
   using ForwardPass = DefaultForwardPass;
   using BackwardPass = NoBackwardPass;
+  using Loss = NoLoss;
   using UpdateUnit = NoUpdateUnit;
   using UpdateConn = NoUpdateConn;
   using PruneUnit = NoPruneUnit;
@@ -206,6 +286,7 @@ concept NetworkTraits =
       typename T::ForwardPass::Accumulator;
       typename T::BackwardPass;
       typename T::BackwardPass::Accumulator;
+      typename T::Loss;
       typename T::UpdateUnit;
       typename T::UpdateConn;
       typename T::PruneUnit;
@@ -222,6 +303,7 @@ concept NetworkTraits =
                typename T::GlobalState> &&
     PassPolicy<typename T::BackwardPass, UnitAllocFor<T>, ConnAllocFor<T>,
                typename T::GlobalState> &&
+    LossPolicy<typename T::Loss, UnitAllocFor<T>, typename T::GlobalState> &&
     UpdateUnitPolicy<typename T::UpdateUnit, UnitAllocFor<T>,
                      typename T::GlobalState> &&
     UpdateConnPolicy<typename T::UpdateConn, UnitAllocFor<T>, ConnAllocFor<T>,
