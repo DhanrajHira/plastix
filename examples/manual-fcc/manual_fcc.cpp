@@ -12,14 +12,14 @@ struct TanhForwardPass {
 
   static float Map(auto &U, size_t, size_t SrcId, auto &C, size_t ConnId,
                    auto &) {
-    return C.template Get<plastix::WeightTag>(ConnId) *
-           U.template Get<plastix::ActivationTag>(SrcId);
+    return plastix::GetField<plastix::WeightTag>(C, ConnId) *
+           plastix::GetField<plastix::ActivationTag>(U, SrcId);
   }
 
   static float Combine(float A, float B) { return A + B; }
 
   static void Apply(auto &U, size_t Id, auto &, float Accumulated) {
-    U.template Get<plastix::ActivationTag>(Id) = std::tanh(Accumulated);
+    plastix::GetField<plastix::ActivationTag>(U, Id) = std::tanh(Accumulated);
   }
 };
 
@@ -34,21 +34,23 @@ struct ManualLayerBuilder {
   template <typename UnitAlloc, typename ConnAlloc>
   plastix::UnitRange operator()(UnitAlloc &UA, ConnAlloc &CA,
                                 plastix::UnitRange PrevLayer) const {
-    uint16_t SrcLevel = UA.template Get<plastix::LevelTag>(PrevLayer.Begin);
+    uint16_t SrcLevel =
+        plastix::GetField<plastix::LevelTag>(UA, PrevLayer.Begin);
     uint16_t NewLevel = SrcLevel + 1;
 
     plastix::UnitRange Units = UA.AllocateMany(NumUnits);
     for (auto Id : Units.Ids())
-      UA.template Get<plastix::LevelTag>(Id) = NewLevel;
+      plastix::GetField<plastix::LevelTag>(UA, Id) = NewLevel;
 
     for (auto Dst : Units.Ids()) {
       for (auto Src : PrevLayer.Ids()) {
         auto ConnId = CA.Allocate();
-        CA.template Get<plastix::FromIdTag>(ConnId) =
+        plastix::GetField<plastix::FromIdTag>(CA, ConnId) =
             static_cast<uint32_t>(Src);
-        CA.template Get<plastix::ToIdTag>(ConnId) = static_cast<uint32_t>(Dst);
-        CA.template Get<plastix::SrcLevelTag>(ConnId) = SrcLevel;
-        CA.template Get<plastix::WeightTag>(ConnId) = InitialWeight;
+        plastix::GetField<plastix::ToIdTag>(CA, ConnId) =
+            static_cast<uint32_t>(Dst);
+        plastix::GetField<plastix::SrcLevelTag>(CA, ConnId) = SrcLevel;
+        plastix::GetField<plastix::WeightTag>(CA, ConnId) = InitialWeight;
       }
     }
 

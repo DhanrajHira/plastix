@@ -43,20 +43,20 @@ struct FullyConnected {
   template <typename UnitAlloc, typename ConnAlloc>
   UnitRange operator()(UnitAlloc &UA, ConnAlloc &CA,
                        UnitRange PrevLayer) const {
-    uint16_t NewLevel = UA.template Get<LevelTag>(PrevLayer.Begin) + 1;
+    uint16_t NewLevel = GetField<LevelTag>(UA, PrevLayer.Begin) + 1;
     UnitRange Units = UA.AllocateMany(NumUnits);
     for (auto Id : Units.Ids()) {
-      UA.template Get<LevelTag>(Id) = NewLevel;
+      GetField<LevelTag>(UA, Id) = NewLevel;
       InitUnit(UA, Id);
     }
 
-    uint16_t SrcLevel = UA.template Get<LevelTag>(PrevLayer.Begin);
+    uint16_t SrcLevel = GetField<LevelTag>(UA, PrevLayer.Begin);
     for (auto U : Units.Ids()) {
       for (auto Src : PrevLayer.Ids()) {
         auto ConnId = CA.Allocate();
-        CA.template Get<ToIdTag>(ConnId) = static_cast<uint32_t>(U);
-        CA.template Get<FromIdTag>(ConnId) = static_cast<uint32_t>(Src);
-        CA.template Get<SrcLevelTag>(ConnId) = SrcLevel;
+        GetField<ToIdTag>(CA, ConnId) = static_cast<uint32_t>(U);
+        GetField<FromIdTag>(CA, ConnId) = static_cast<uint32_t>(Src);
+        GetField<SrcLevelTag>(CA, ConnId) = SrcLevel;
         InitConn(CA, ConnId);
       }
     }

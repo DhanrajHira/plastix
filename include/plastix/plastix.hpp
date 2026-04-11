@@ -94,7 +94,7 @@ public:
     using Acc = typename FP::Accumulator;
 
     for (size_t I = 0; I < NumInput; ++I)
-      UnitAlloc.template Get<ActivationTag>(I) = Inputs[I];
+      GetField<ActivationTag>(UnitAlloc, I) = Inputs[I];
 
     if constexpr (Traits::Model == Propagation::Topological) {
       if (NeedsResort)
@@ -102,19 +102,19 @@ public:
 
       for (uint16_t L = 1; L <= NumLevels; ++L) {
         for (uint32_t C = Ranges[L - 1].Begin; C < Ranges[L - 1].End; ++C) {
-          if (ConnAlloc.template Get<DeadTag>(C))
+          if (GetField<DeadTag>(ConnAlloc, C))
             continue;
-          auto ToId = ConnAlloc.template Get<ToIdTag>(C);
-          auto FromId = ConnAlloc.template Get<FromIdTag>(C);
-          auto &UAcc = UnitAlloc.template Get<ForwardAccTag>(ToId);
+          auto ToId = GetField<ToIdTag>(ConnAlloc, C);
+          auto FromId = GetField<FromIdTag>(ConnAlloc, C);
+          auto &UAcc = GetField<ForwardAccTag>(UnitAlloc, ToId);
           UAcc = FP::Combine(
               UAcc, FP::Map(UnitAlloc, ToId, FromId, ConnAlloc, C, Globals));
         }
 
         size_t NumUnits = UnitAlloc.Size();
         for (size_t I = NumInput; I < NumUnits; ++I) {
-          if (UnitAlloc.template Get<LevelTag>(I) == L) {
-            auto &UAcc = UnitAlloc.template Get<ForwardAccTag>(I);
+          if (GetField<LevelTag>(UnitAlloc, I) == L) {
+            auto &UAcc = GetField<ForwardAccTag>(UnitAlloc, I);
             FP::Apply(UnitAlloc, I, Globals, UAcc);
             UAcc = Acc{};
           }
@@ -122,18 +122,18 @@ public:
       }
     } else {
       for (size_t C = 0; C < ConnAlloc.Size(); ++C) {
-        if (ConnAlloc.template Get<DeadTag>(C))
+        if (GetField<DeadTag>(ConnAlloc, C))
           continue;
-        auto ToId = ConnAlloc.template Get<ToIdTag>(C);
-        auto FromId = ConnAlloc.template Get<FromIdTag>(C);
-        auto &UAcc = UnitAlloc.template Get<ForwardAccTag>(ToId);
+        auto ToId = GetField<ToIdTag>(ConnAlloc, C);
+        auto FromId = GetField<FromIdTag>(ConnAlloc, C);
+        auto &UAcc = GetField<ForwardAccTag>(UnitAlloc, ToId);
         UAcc = FP::Combine(
             UAcc, FP::Map(UnitAlloc, ToId, FromId, ConnAlloc, C, Globals));
       }
 
       size_t NumUnits = UnitAlloc.Size();
       for (size_t I = NumInput; I < NumUnits; ++I) {
-        auto &UAcc = UnitAlloc.template Get<ForwardAccTag>(I);
+        auto &UAcc = GetField<ForwardAccTag>(UnitAlloc, I);
         FP::Apply(UnitAlloc, I, Globals, UAcc);
         UAcc = Acc{};
       }
@@ -152,19 +152,19 @@ public:
       if constexpr (Traits::Model == Propagation::Topological) {
         for (uint16_t L = NumLevels; L >= 1; --L) {
           for (uint32_t C = Ranges[L].Begin; C < Ranges[L].End; ++C) {
-            if (ConnAlloc.template Get<DeadTag>(C))
+            if (GetField<DeadTag>(ConnAlloc, C))
               continue;
-            auto ToId = ConnAlloc.template Get<ToIdTag>(C);
-            auto FromId = ConnAlloc.template Get<FromIdTag>(C);
-            auto &UAcc = UnitAlloc.template Get<BackwardAccTag>(FromId);
+            auto ToId = GetField<ToIdTag>(ConnAlloc, C);
+            auto FromId = GetField<FromIdTag>(ConnAlloc, C);
+            auto &UAcc = GetField<BackwardAccTag>(UnitAlloc, FromId);
             UAcc = BP::Combine(
                 UAcc, BP::Map(UnitAlloc, FromId, ToId, ConnAlloc, C, Globals));
           }
 
           size_t NumUnits = UnitAlloc.Size();
           for (size_t I = NumInput; I < NumUnits; ++I) {
-            if (UnitAlloc.template Get<LevelTag>(I) == L) {
-              auto &UAcc = UnitAlloc.template Get<BackwardAccTag>(I);
+            if (GetField<LevelTag>(UnitAlloc, I) == L) {
+              auto &UAcc = GetField<BackwardAccTag>(UnitAlloc, I);
               BP::Apply(UnitAlloc, I, Globals, UAcc);
               UAcc = Acc{};
             }
@@ -172,18 +172,18 @@ public:
         }
       } else {
         for (size_t C = ConnAlloc.Size(); C-- > 0;) {
-          if (ConnAlloc.template Get<DeadTag>(C))
+          if (GetField<DeadTag>(ConnAlloc, C))
             continue;
-          auto ToId = ConnAlloc.template Get<ToIdTag>(C);
-          auto FromId = ConnAlloc.template Get<FromIdTag>(C);
-          auto &UAcc = UnitAlloc.template Get<BackwardAccTag>(FromId);
+          auto ToId = GetField<ToIdTag>(ConnAlloc, C);
+          auto FromId = GetField<FromIdTag>(ConnAlloc, C);
+          auto &UAcc = GetField<BackwardAccTag>(UnitAlloc, FromId);
           UAcc = BP::Combine(
               UAcc, BP::Map(UnitAlloc, FromId, ToId, ConnAlloc, C, Globals));
         }
 
         size_t NumUnits = UnitAlloc.Size();
         for (size_t I = 0; I < NumUnits; ++I) {
-          auto &UAcc = UnitAlloc.template Get<BackwardAccTag>(I);
+          auto &UAcc = GetField<BackwardAccTag>(UnitAlloc, I);
           BP::Apply(UnitAlloc, I, Globals, UAcc);
           UAcc = Acc{};
         }
@@ -217,19 +217,19 @@ public:
       using UP = typename Traits::UpdateConn;
 
       for (size_t C = 0; C < ConnAlloc.Size(); ++C) {
-        if (ConnAlloc.template Get<DeadTag>(C))
+        if (GetField<DeadTag>(ConnAlloc, C))
           continue;
-        auto ToId = ConnAlloc.template Get<ToIdTag>(C);
-        auto FromId = ConnAlloc.template Get<FromIdTag>(C);
+        auto ToId = GetField<ToIdTag>(ConnAlloc, C);
+        auto FromId = GetField<FromIdTag>(ConnAlloc, C);
         UP::UpdateIncomingConnection(UnitAlloc, ToId, FromId, ConnAlloc, C,
                                      Globals);
       }
 
       for (size_t C = 0; C < ConnAlloc.Size(); ++C) {
-        if (ConnAlloc.template Get<DeadTag>(C))
+        if (GetField<DeadTag>(ConnAlloc, C))
           continue;
-        auto ToId = ConnAlloc.template Get<ToIdTag>(C);
-        auto FromId = ConnAlloc.template Get<FromIdTag>(C);
+        auto ToId = GetField<ToIdTag>(ConnAlloc, C);
+        auto FromId = GetField<FromIdTag>(ConnAlloc, C);
         UP::UpdateOutgoingConnection(UnitAlloc, FromId, ToId, ConnAlloc, C,
                                      Globals);
       }
@@ -242,7 +242,7 @@ public:
       using PP = typename Traits::PruneUnit;
       size_t NumUnits = UnitAlloc.Size();
       for (size_t I = 0; I < NumUnits; ++I)
-        UnitAlloc.template Get<PrunedTag>(I) =
+        GetField<PrunedTag>(UnitAlloc, I) =
             PP::ShouldPrune(UnitAlloc, I, Globals);
     }
   }
@@ -259,22 +259,22 @@ public:
           !std::is_same_v<typename Traits::PruneConn, NoPruneConn>;
 
       for (size_t C = 0; C < ConnAlloc.Size(); ++C) {
-        if (ConnAlloc.template Get<DeadTag>(C))
+        if (GetField<DeadTag>(ConnAlloc, C))
           continue;
-        auto ToId = ConnAlloc.template Get<ToIdTag>(C);
-        auto FromId = ConnAlloc.template Get<FromIdTag>(C);
+        auto ToId = GetField<ToIdTag>(ConnAlloc, C);
+        auto FromId = GetField<FromIdTag>(ConnAlloc, C);
 
         bool Remove = false;
         if constexpr (HasUnitPrune)
-          Remove = UnitAlloc.template Get<PrunedTag>(ToId) ||
-                   UnitAlloc.template Get<PrunedTag>(FromId);
+          Remove = GetField<PrunedTag>(UnitAlloc, ToId) ||
+                   GetField<PrunedTag>(UnitAlloc, FromId);
         if constexpr (HasConnPrune)
           if (!Remove)
             Remove =
                 CP::ShouldPrune(UnitAlloc, ToId, FromId, ConnAlloc, C, Globals);
 
         if (Remove)
-          ConnAlloc.template Get<DeadTag>(C) = true;
+          GetField<DeadTag>(ConnAlloc, C) = true;
       }
     }
   }
@@ -287,12 +287,12 @@ public:
       for (size_t I = 0; I < NumUnits; ++I) {
         auto Offset = AP::AddUnit(UnitAlloc, I, Globals);
         if (Offset.has_value()) {
-          int32_t Base = UnitAlloc.template Get<LevelTag>(I);
+          int32_t Base = GetField<LevelTag>(UnitAlloc, I);
           int32_t NewLevel =
               std::clamp(Base + static_cast<int32_t>(*Offset), int32_t{1},
                          static_cast<int32_t>(MaxLevels - 1));
           auto NewId = UnitAlloc.Allocate();
-          UnitAlloc.template Get<LevelTag>(NewId) =
+          GetField<LevelTag>(UnitAlloc, NewId) =
               static_cast<uint16_t>(NewLevel);
           AP::InitUnit(UnitAlloc, NewId, I, Globals);
         }
@@ -318,7 +318,7 @@ public:
       memset(LevelOffset, 0, (NumUnits + 1) * sizeof(uint32_t));
       uint16_t HighestLevel = 0;
       for (size_t I = 0; I < NumUnits; ++I) {
-        uint16_t Lvl = UnitAlloc.template Get<LevelTag>(I);
+        uint16_t Lvl = GetField<LevelTag>(UnitAlloc, I);
         ++LevelOffset[Lvl];
         if (Lvl > HighestLevel)
           HighestLevel = Lvl;
@@ -334,7 +334,7 @@ public:
 
       memcpy(LevelWritePos, LevelOffset, (HighestLevel + 1) * sizeof(uint32_t));
       for (size_t I = 0; I < NumUnits; ++I) {
-        uint16_t Lvl = UnitAlloc.template Get<LevelTag>(I);
+        uint16_t Lvl = GetField<LevelTag>(UnitAlloc, I);
         UnitsByLevel[LevelWritePos[Lvl]++] = static_cast<uint32_t>(I);
       }
 
@@ -407,10 +407,10 @@ public:
         uint32_t F = Props[I].From();
         uint32_t T = Props[I].To();
         auto ConnId = ConnAlloc.Allocate();
-        ConnAlloc.template Get<FromIdTag>(ConnId) = F;
-        ConnAlloc.template Get<ToIdTag>(ConnId) = T;
-        ConnAlloc.template Get<SrcLevelTag>(ConnId) =
-            UnitAlloc.template Get<LevelTag>(F);
+        GetField<FromIdTag>(ConnAlloc, ConnId) = F;
+        GetField<ToIdTag>(ConnAlloc, ConnId) = T;
+        GetField<SrcLevelTag>(ConnAlloc, ConnId) =
+            GetField<LevelTag>(UnitAlloc, F);
         AC::InitConnection(UnitAlloc, F, T, ConnAlloc, ConnId, Globals);
       }
 
@@ -436,8 +436,7 @@ public:
   }
 
   std::span<const float> GetOutput() const {
-    const float *Base =
-        &UnitAlloc.template Get<ActivationTag>(OutputRange.Begin);
+    const float *Base = &GetField<ActivationTag>(UnitAlloc, OutputRange.Begin);
     return {Base, OutputRange.Size()};
   }
 
@@ -450,7 +449,7 @@ private:
     size_t NumConns = ConnAlloc.Size();
 
     for (size_t I = NumInput; I < NumUnits; ++I)
-      UnitAlloc.template Get<LevelTag>(I) = 0;
+      GetField<LevelTag>(UnitAlloc, I) = 0;
 
     if (NumConns == 0)
       return;
@@ -468,10 +467,10 @@ private:
 
     // Count in-degree and out-degree per unit
     for (size_t C = 0; C < NumConns; ++C) {
-      if (ConnAlloc.template Get<DeadTag>(C))
+      if (GetField<DeadTag>(ConnAlloc, C))
         continue;
-      ++OutOffset[ConnAlloc.template Get<FromIdTag>(C)];
-      ++InDegree[ConnAlloc.template Get<ToIdTag>(C)];
+      ++OutOffset[GetField<FromIdTag>(ConnAlloc, C)];
+      ++InDegree[GetField<ToIdTag>(ConnAlloc, C)];
     }
 
     // Prefix sum: convert out-degrees in OutOffset to cumulative offsets
@@ -486,9 +485,9 @@ private:
     // Scatter connections into OutEdges
     memcpy(WritePos, OutOffset, NumUnits * sizeof(uint32_t));
     for (size_t C = 0; C < NumConns; ++C) {
-      if (ConnAlloc.template Get<DeadTag>(C))
+      if (GetField<DeadTag>(ConnAlloc, C))
         continue;
-      uint32_t From = ConnAlloc.template Get<FromIdTag>(C);
+      uint32_t From = GetField<FromIdTag>(ConnAlloc, C);
       OutEdges[WritePos[From]++] = C;
     }
 
@@ -505,9 +504,9 @@ private:
         uint32_t U = Frontier[F];
         for (uint32_t E = OutOffset[U]; E < OutOffset[U + 1]; ++E) {
           size_t C = OutEdges[E];
-          uint32_t To = ConnAlloc.template Get<ToIdTag>(C);
+          uint32_t To = GetField<ToIdTag>(ConnAlloc, C);
           if (--InDegree[To] == 0) {
-            UnitAlloc.template Get<LevelTag>(To) =
+            GetField<LevelTag>(UnitAlloc, To) =
                 static_cast<uint16_t>(CurrentLevel + 1);
             NextFrontier[NextSize++] = To;
           }
@@ -529,14 +528,13 @@ private:
     }
 
     for (size_t C = 0; C < N; ++C) {
-      auto From = ConnAlloc.template Get<FromIdTag>(C);
-      ConnAlloc.template Get<SrcLevelTag>(C) =
-          UnitAlloc.template Get<LevelTag>(From);
+      auto From = GetField<FromIdTag>(ConnAlloc, C);
+      GetField<SrcLevelTag>(ConnAlloc, C) = GetField<LevelTag>(UnitAlloc, From);
     }
 
     uint32_t Histogram[MaxLevels] = {};
     for (size_t C = 0; C < N; ++C)
-      ++Histogram[ConnAlloc.template Get<SrcLevelTag>(C)];
+      ++Histogram[GetField<SrcLevelTag>(ConnAlloc, C)];
 
     uint32_t Offset = 0;
     NumLevels = 0;
@@ -554,7 +552,7 @@ private:
 
     size_t *Perm = ConnAlloc.PermutationScratch();
     for (size_t C = 0; C < N; ++C) {
-      uint16_t Lvl = ConnAlloc.template Get<SrcLevelTag>(C);
+      uint16_t Lvl = GetField<SrcLevelTag>(ConnAlloc, C);
       Perm[WritePos[Lvl]++] = C;
     }
 

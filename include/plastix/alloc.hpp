@@ -158,6 +158,14 @@ public:
 
 } // namespace alloc
 
+// Free-function shorthand for Alloc.template Get<Tag>(Id). Avoids the
+// `.template` disambiguator when the allocator is a dependent type (e.g.
+// `auto &` policy parameters) and reads a bit cleaner at call sites.
+// Const-propagates via auto& deduction.
+template <typename Tag> constexpr auto &GetField(auto &Alloc, size_t Id) {
+  return Alloc.template Get<Tag>(Id);
+}
+
 } // namespace plastix
 
 #endif // PLASTIX_ALLOC_HPP

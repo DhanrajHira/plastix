@@ -99,12 +99,11 @@ struct DefaultForwardPass {
   using Accumulator = float;
   static float Map(auto &U, size_t, size_t SrcId, auto &C, size_t ConnId,
                    auto &) {
-    return C.template Get<WeightTag>(ConnId) *
-           U.template Get<ActivationTag>(SrcId);
+    return GetField<WeightTag>(C, ConnId) * GetField<ActivationTag>(U, SrcId);
   }
   static float Combine(float A, float B) { return A + B; }
   static void Apply(auto &U, size_t Id, auto &, float Accumulated) {
-    U.template Get<ActivationTag>(Id) = Accumulated;
+    GetField<ActivationTag>(U, Id) = Accumulated;
   }
 };
 

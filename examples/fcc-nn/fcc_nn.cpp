@@ -11,14 +11,14 @@ struct SigmoidForwardPass {
 
   static float Map(auto &U, size_t, size_t SrcId, auto &C, size_t ConnId,
                    auto &) {
-    return C.template Get<plastix::WeightTag>(ConnId) *
-           U.template Get<plastix::ActivationTag>(SrcId);
+    return plastix::GetField<plastix::WeightTag>(C, ConnId) *
+           plastix::GetField<plastix::ActivationTag>(U, SrcId);
   }
 
   static float Combine(float A, float B) { return A + B; }
 
   static void Apply(auto &U, size_t Id, auto &, float Accumulated) {
-    U.template Get<plastix::ActivationTag>(Id) =
+    plastix::GetField<plastix::ActivationTag>(U, Id) =
         1.0f / (1.0f + std::exp(-Accumulated));
   }
 };
@@ -30,7 +30,7 @@ struct FccTraits : plastix::DefaultNetworkTraits<> {
 // Weight initializers for the FullyConnected layer builder.
 template <int Scaled> struct ConstWeightInit {
   void operator()(auto &CA, auto Id) const {
-    CA.template Get<plastix::WeightTag>(Id) = Scaled / 100.0f;
+    plastix::GetField<plastix::WeightTag>(CA, Id) = Scaled / 100.0f;
   }
 };
 
