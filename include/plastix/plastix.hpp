@@ -224,10 +224,14 @@ public:
     }
   }
 
-  // Updates per-unit state via the Map/Combine/Apply reduce pattern from
-  // UpdateUnitPolicy. The UpdateAccTag field (in UnitStateAllocator) serves
-  // as the per-unit accumulator; it is zero-reset after Apply.
-  // Compiled out entirely when UpdateUnit = NoUpdateUnit.
+  void DoResetGlobalState() {
+    if constexpr (std::is_same_v<typename Traits::ResetGlobal,
+                                 NoResetGlobalState>)
+      return;
+    else
+      Traits::ResetGlobal::Reset(Globals);
+  }
+
   void DoUpdateUnitState() {
     if constexpr (std::is_same_v<typename Traits::UpdateUnit, NoUpdateUnit>)
       return;
@@ -485,6 +489,7 @@ public:
       if (NeedsResort)
         SortConnectionsByLevel();
     }
+    DoResetGlobalState();
   }
 
   // Returns the output activations from the last completed forward pass.
