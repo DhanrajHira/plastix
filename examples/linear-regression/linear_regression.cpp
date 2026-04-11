@@ -13,14 +13,14 @@ struct LinearForwardPass {
 
   static float Map(auto &U, size_t, size_t SrcId, auto &C, size_t ConnId,
                    auto &) {
-    return C.template Get<plastix::WeightTag>(ConnId) *
-           U.template Get<plastix::ActivationTag>(SrcId);
+    return plastix::GetField<plastix::WeightTag>(C, ConnId) *
+           plastix::GetField<plastix::ActivationTag>(U, SrcId);
   }
 
   static float Combine(float A, float B) { return A + B; }
 
   static void Apply(auto &U, size_t Id, auto &, float Accumulated) {
-    U.template Get<plastix::ActivationTag>(Id) = Accumulated;
+    plastix::GetField<plastix::ActivationTag>(U, Id) = Accumulated;
   }
 };
 
@@ -32,9 +32,10 @@ struct LinearForwardPass {
 struct GradientDescentConn {
   static void UpdateIncomingConnection(auto &U, size_t DstId, size_t SrcId,
                                        auto &C, size_t ConnId, auto &) {
-    float Error = U.template Get<plastix::BackwardAccTag>(DstId);
-    float Input = U.template Get<plastix::ActivationTag>(SrcId);
-    C.template Get<plastix::WeightTag>(ConnId) += LearningRate * Error * Input;
+    float Error = plastix::GetField<plastix::BackwardAccTag>(U, DstId);
+    float Input = plastix::GetField<plastix::ActivationTag>(U, SrcId);
+    plastix::GetField<plastix::WeightTag>(C, ConnId) +=
+        LearningRate * Error * Input;
   }
 
   static void UpdateOutgoingConnection(auto &, size_t, size_t, auto &, size_t,
@@ -79,7 +80,7 @@ int main() {
     // Stage the error on the output unit for the update step to consume.
     auto &U = Net.GetUnitAlloc();
     float Pred = Net.GetOutput()[0];
-    U.Get<plastix::BackwardAccTag>(OutputId) = Y - Pred;
+    plastix::GetField<plastix::BackwardAccTag>(U, OutputId) = Y - Pred;
 
     Net.DoUpdateConnectionState();
 
@@ -99,7 +100,7 @@ int main() {
   for (size_t C = 0; C < CA.Size(); ++C) {
     if (C > 0)
       std::cout << ", ";
-    std::cout << CA.Get<plastix::WeightTag>(C);
+    std::cout << plastix::GetField<plastix::WeightTag>(CA, C);
   }
   std::cout << "]\n";
 
