@@ -72,11 +72,20 @@ public:
     requires(sizeof...(Builders) > 0 &&
              (LayerBuilder<Builders, UnitAllocator, ConnAllocator> && ...))
   Network(size_t InputDim, Builders... Layers)
+      : Network(InputDim, NoUnitInit{}, Layers...) {}
+
+  template <typename InputInit, typename... Builders>
+    requires(std::invocable<InputInit, UnitAllocator &, size_t> &&
+             sizeof...(Builders) > 0 &&
+             (LayerBuilder<Builders, UnitAllocator, ConnAllocator> && ...))
+  Network(size_t InputDim, InputInit Init, Builders... Layers)
       : NumInput(InputDim), UnitAlloc(4096), ConnAlloc(4096 * 4),
         KahnAlloc(UnitAlloc.GetCapacity() + 1),
         ProposalAlloc(ConnAlloc.GetCapacity()) {
-    for (size_t I = 0; I < InputDim; ++I)
-      (void)UnitAlloc.Allocate();
+    for (size_t I = 0; I < InputDim; ++I) {
+      auto Id = UnitAlloc.Allocate();
+      Init(UnitAlloc, Id);
+    }
     UnitRange Prev{0, InputDim};
     ((Prev = Layers(UnitAlloc, ConnAlloc, Prev)), ...);
     OutputRange = Prev;
