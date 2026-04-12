@@ -22,7 +22,7 @@ struct WeightOneInit {
     CA.template Get<plastix::WeightTag>(Id) = 1.0f;
   }
 };
-using FC = plastix::FullyConnected<plastix::NoUnitInit, WeightOneInit>;
+using FC = plastix::FullyConnected<WeightOneInit>;
 
 static size_t CountAlive(auto &ConnAlloc) {
   size_t Count = 0;
@@ -331,7 +331,7 @@ struct HalfWeightInit {
 };
 
 TEST(PipelineLayerTest, CustomConnInit) {
-  using HalfFC = plastix::FullyConnected<plastix::NoUnitInit, HalfWeightInit>;
+  using HalfFC = plastix::FullyConnected<HalfWeightInit>;
   TestNetwork Net(2, HalfFC{1});
 
   auto &CA = Net.GetConnAlloc();
