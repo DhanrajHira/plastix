@@ -35,10 +35,8 @@ template <int Scaled> struct ConstWeightInit {
 };
 
 using FccNetwork = plastix::Network<FccTraits>;
-using HiddenLayer =
-    plastix::FullyConnected<plastix::NoUnitInit, ConstWeightInit<50>>;
-using OutputLayer =
-    plastix::FullyConnected<plastix::NoUnitInit, ConstWeightInit<-20>>;
+using HiddenLayer = plastix::FullyConnected<ConstWeightInit<50>>;
+using OutputLayer = plastix::FullyConnected<ConstWeightInit<-20>>;
 
 int main() {
   std::cout << "Plastix FCC-NN Example\n";

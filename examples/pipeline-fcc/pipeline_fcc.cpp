@@ -38,7 +38,7 @@ struct HalfWeightInit {
 };
 
 using PipelineNetwork = plastix::Network<PipelineFccTraits>;
-using FC = plastix::FullyConnected<plastix::NoUnitInit, HalfWeightInit>;
+using FC = plastix::FullyConnected<HalfWeightInit>;
 
 static void PrintActivations(PipelineNetwork &Net, size_t NumInput,
                              size_t NumHidden, size_t NumOutput) {

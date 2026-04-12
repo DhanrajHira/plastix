@@ -6,6 +6,7 @@
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
+#include <random>
 #include <ranges>
 #include <utility>
 
@@ -34,11 +35,24 @@ struct NoConnInit {
   void operator()(auto &, auto) const {}
 };
 
-template <typename UnitInit = NoUnitInit, typename ConnInit = NoConnInit>
+struct RandomUniformWeight {
+  RandomUniformWeight(uint32_t Seed = 0, float Min = -1.0f, float Max = 1.0f)
+      : Rng(Seed), Dist(Min, Max) {}
+
+  void operator()(auto &CA, auto Id) const {
+    GetField<WeightTag>(CA, Id) = Dist(Rng);
+  }
+
+private:
+  mutable std::mt19937 Rng;
+  mutable std::uniform_real_distribution<float> Dist;
+};
+
+template <typename ConnInit = NoConnInit, typename UnitInit = NoUnitInit>
 struct FullyConnected {
   size_t NumUnits;
-  UnitInit InitUnit = {};
   ConnInit InitConn = {};
+  UnitInit InitUnit = {};
 
   template <typename UnitAlloc, typename ConnAlloc>
   UnitRange operator()(UnitAlloc &UA, ConnAlloc &CA,
