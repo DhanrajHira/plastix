@@ -14,8 +14,16 @@
 
 namespace plastix {
 namespace alloc {
+
+// AllocId is an integer index into a SOAAllocator array. It is parameterised
+// on the entity type only for documentation clarity; there is no runtime
+// distinction between ids of different types.
 template <typename T> using AllocId = size_t;
 
+// SOAField pairs a unique empty tag type with its data type. The tag is used
+// as a compile-time key to locate the right array inside SOAAllocator::Get<>.
+// Tag must be an empty class (no data members) so that it carries zero
+// runtime cost while remaining a distinct type for each field.
 template <typename FieldTag, typename T>
 
 struct SOAField {
@@ -27,11 +35,27 @@ struct SOAField {
   using Type = T;
 };
 
+// SOAAllocator stores N entities in struct-of-arrays layout: each field has
+// its own contiguous array of length Capacity, so iterating all values of a
+// single field is cache-friendly. Fields are accessed by tag, which resolves
+// to a tuple index at compile time with zero runtime overhead.
+//
+// Memory is reserved with mmap + MAP_NORESERVE: virtual address space is
+// committed up front but physical pages are only faulted in on first access,
+// so over-estimating Capacity is cheap.
+//
+// To add fields beyond the built-in UnitState fields (e.g. for a custom
+// learning algorithm), construct a new SOAAllocator<UnitState, ...all base
+// fields..., SOAField<MyTag, MyType>> directly — no framework changes needed.
+// See examples/ipc-linear/ for a worked example.
 template <typename T, typename... Fields> class SOAAllocator {
   std::tuple<typename Fields::Type *...> FieldPtrs;
   std::atomic<size_t> Count;
   size_t Capacity;
 
+  // Resolves FieldTag to its index in the Fields... pack at compile time.
+  // Uses a short-circuit fold: increments I for each non-matching tag until
+  // the matching one is found, then the && chain stops.
   template <typename FieldTag> constexpr static size_t IndexOf() {
     size_t I = 0;
     ((std::is_same_v<FieldTag, typename Fields::Tag> ? false : (++I, true)) &&
@@ -42,6 +66,8 @@ template <typename T, typename... Fields> class SOAAllocator {
 public:
   explicit SOAAllocator(size_t NumElements)
       : FieldPtrs{}, Count{0}, Capacity{NumElements} {
+    // All field arrays are the same length. Size each arena by the largest
+    // element type so a single ArenaSize constant covers every field.
     constexpr size_t MaxFieldSize =
         std::max({sizeof(typename Fields::Type)...});
     size_t ArenaSize = NumElements * MaxFieldSize;
@@ -55,6 +81,10 @@ public:
         FieldPtrs);
   }
 
+  // Bump-allocates one entity slot. Uses an atomic increment so the allocator
+  // is safe to call from multiple threads during network construction.
+  // Returns size_t(-1) on overflow (capacity exceeded).
+  // Placement-new value-initialises every field for the new slot.
   AllocId<T> Allocate() {
     size_t Id = Count.fetch_add(1);
     if (Id >= Capacity) {
@@ -69,6 +99,9 @@ public:
     return Id;
   };
 
+  // Tag-dispatched field access. IndexOf<FieldTag>() is a constexpr that
+  // resolves to a tuple index, so std::get<Index> selects the right array
+  // and Field[Id] indexes into it — no branching at runtime.
   template <typename FieldTag> auto &Get(AllocId<T> Id) {
     constexpr auto Index = IndexOf<FieldTag>();
     const auto &Field = std::get<Index>(FieldPtrs);
@@ -81,6 +114,7 @@ public:
     return Field[Id];
   };
 
+  // Convenience overload when there is exactly one field — no tag needed.
   auto &Get(AllocId<T> Id)
     requires(sizeof...(Fields) == 1)
   {
@@ -98,8 +132,14 @@ public:
 
 // ---------------------------------------------------------------------------
 // Page-structured allocation
+//
+// PageAllocator extends SOAAllocator for entities whose fields are fixed-size
+// arrays of slots (PageType). It adds CompactPage() for in-place stream
+// compaction, used by DoPruneConnections() to remove dead connections.
 // ---------------------------------------------------------------------------
 
+// PageType concept: a field stored in a PageAllocator must expose indexed
+// slot access so ScatterField can move slots without knowing the concrete type.
 template <typename T>
 concept PageType = requires(T &P, const T &CP, size_t I) {
   P.WriteSlot(I);
@@ -117,13 +157,16 @@ template <typename Entity, typename... Fields>
 class PageAllocator : public SOAAllocator<Entity, Fields...> {
   using Base = SOAAllocator<Entity, Fields...>;
 
+  // Compacts one field's slots for a single page in-place.
+  // LiveMask is a bitmask where bit i is set if slot i should survive.
+  // Surviving slots are moved to the front in index order, overwriting gaps.
   template <typename Field>
   void ScatterField(AllocId<Entity> PageId, uint32_t LiveMask) {
     auto &Page = Base::template Get<typename Field::Tag>(PageId);
     uint32_t Remaining = LiveMask;
     size_t Dst = 0;
     while (Remaining) {
-      size_t Src = std::countr_zero(Remaining);
+      size_t Src = std::countr_zero(Remaining); // index of lowest set bit
       if (Dst != Src)
         Page.WriteSlot(Dst) = Page.GetSlot(Src);
       Remaining &= Remaining - 1; // clear lowest set bit
@@ -134,6 +177,9 @@ class PageAllocator : public SOAAllocator<Entity, Fields...> {
 public:
   using Base::Base;
 
+  // Compacts all fields of one page according to LiveMask. Called by
+  // DoPruneConnections() after it has computed which slots survive.
+  // The caller is responsible for updating the page's Count field.
   void CompactPage(AllocId<Entity> PageId, uint32_t LiveMask) {
     (ScatterField<Fields>(PageId, LiveMask), ...);
   }
