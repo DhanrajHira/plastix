@@ -72,7 +72,7 @@ public:
     requires(sizeof...(Builders) > 0 &&
              (LayerBuilder<Builders, UnitAllocator, ConnAllocator> && ...))
   Network(size_t InputDim, Builders... Layers)
-      : NumInput(InputDim), UnitAlloc(256), ConnAlloc(256),
+      : NumInput(InputDim), UnitAlloc(4096), ConnAlloc(4096 * 4),
         KahnAlloc(UnitAlloc.GetCapacity() + 1),
         ProposalAlloc(ConnAlloc.GetCapacity()) {
     for (size_t I = 0; I < InputDim; ++I)
