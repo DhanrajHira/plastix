@@ -43,7 +43,7 @@ public:
     requires(sizeof...(Builders) > 0 &&
              (LayerBuilder<Builders, UnitAllocator, ConnAllocator> && ...))
   Network(size_t InputDim, Builders... Layers)
-      : NumInput(InputDim), UnitAlloc(256), ConnAlloc(256) {
+      : NumInput(InputDim), UnitAlloc(1 << 20), ConnAlloc(1 << 20) {
     for (size_t I = 0; I < InputDim; ++I)
       UnitAlloc.Allocate();
     UnitRange Prev{0, InputDim};

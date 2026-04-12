@@ -8,8 +8,8 @@
 // Key improvements over v1:
 //   - No ping-pong buffer sync (the pre-step block is eliminated)
 //   - ActivationTag serves directly as the persistent value node x^(l)
-//   - A single extra field (ErrorTag) is added via ExtraUnitFields
-//   - Error is relayed through existing tags between passes
+//   - Two extra fields (ErrorTag, BottomUpTag) are added via ExtraUnitFields
+//   - Error and bottom-up signals are relayed through extra tags between passes
 //
 // ---------------------------------------------------------------------------
 // Algorithm overview
@@ -64,15 +64,16 @@
 //        Map:     reads weight and ErrorTag(DstId), returns weight * eps
 //        Combine: sum
 //        Apply:   for hidden units: bottom_up = f'(x) * BackwardAcc
-//                 writes bottom_up to UpdateAccTag(Id)
+//                 writes bottom_up to BottomUpTag(Id)
 //
 //   3. DoUpdateConnectionState  [iPCUpdateConn]
 //        reads ErrorTag(DstId) and f(ActivationTag(SrcId))
 //        writes theta += alpha * eps * f(x_src)
 //
-//   4. Manual value-node update (hidden units only):
+//   4. DoUpdateUnitState  [iPCUpdateUnit]
+//        for hidden units:
 //        ActivationTag(I) += gamma * (-eps + bottom_up)
-//        where eps from ErrorTag, bottom_up from UpdateAccTag.
+//        where eps from ErrorTag, bottom_up from BottomUpTag.
 // ===========================================================================
 
 #include <plastix/plastix.hpp>
@@ -82,10 +83,11 @@
 #include <random>
 
 // ---------------------------------------------------------------------------
-// Extra per-unit field for prediction error
+// Extra per-unit fields for prediction error and bottom-up signal
 // ---------------------------------------------------------------------------
 
 struct ErrorTag {};
+struct BottomUpTag {};
 
 // ---------------------------------------------------------------------------
 // Topology & hyperparameters
@@ -160,7 +162,7 @@ struct iPCBackwardPass {
     if (Id >= HiddenBegin && Id < HiddenEnd) {
       float X = U.template Get<plastix::ActivationTag>(Id);
       float BottomUp = ActDeriv(X) * BackwardAcc;
-      U.template Get<plastix::UpdateAccTag>(Id) = BottomUp;
+      U.template Get<BottomUpTag>(Id) = BottomUp;
     }
   }
 };
@@ -187,18 +189,13 @@ struct iPCUpdateConn {
 // iPC value-node update: x += γ · (-ε + bottom_up)
 // ---------------------------------------------------------------------------
 
-// Does not need the map and combine, so this ends up wasting some computation.
-// We could consider the update unit policy to only have access to the unit and not the connections.
 struct iPCUpdateUnit {
-  using Partial = float;
-  static float Map(auto &, size_t, size_t, auto &, float) { return 0.0f; }
-  static float Combine(float A, float B) { return A + B; }
-  static void Apply(auto &U, size_t Id, auto &, float) {
+  static void Update(auto &U, size_t Id, auto &) {
     if (Id >= HiddenBegin && Id < HiddenEnd) {
       float Eps = U.template Get<ErrorTag>(Id);
-      float BottomUp = U.template Get<plastix::UpdateAccTag>(Id);
+      float BottomUp = U.template Get<BottomUpTag>(Id);
       U.template Get<plastix::ActivationTag>(Id) += Gamma * (-Eps + BottomUp);
-      U.template Get<plastix::UpdateAccTag>(Id) = 0.0f;
+      U.template Get<BottomUpTag>(Id) = 0.0f;
     }
   }
 };
@@ -214,7 +211,8 @@ struct iPCTraits
   using UpdateUnit = iPCUpdateUnit;
   using UpdateConn = iPCUpdateConn;
   using ExtraUnitFields = plastix::UnitFieldList<
-      plastix::alloc::SOAField<ErrorTag, float>>;
+      plastix::alloc::SOAField<ErrorTag, float>,
+      plastix::alloc::SOAField<BottomUpTag, float>>;
 };
 
 using iPCNet = plastix::Network<iPCTraits>;
