@@ -1,8 +1,3 @@
-set(
-  example_src_files
-    "${CMAKE_CURRENT_SOURCE_DIR}/ipc_linear.cpp"
-)
-
-add_executable(ipc_linear ${example_src_files})
-
+add_executable(ipc_linear ipc_linear.cpp)
 target_link_libraries(ipc_linear PRIVATE plastix)
+target_compile_options(ipc_linear PRIVATE -Wall -Wextra -Wpedantic)

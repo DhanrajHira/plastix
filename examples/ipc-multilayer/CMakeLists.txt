@@ -1,8 +1,3 @@
-set(
-  example_src_files
-    "${CMAKE_CURRENT_SOURCE_DIR}/ipc_multilayer.cpp"
-)
-
-add_executable(ipc_multilayer ${example_src_files})
-
+add_executable(ipc_multilayer ipc_multilayer.cpp)
 target_link_libraries(ipc_multilayer PRIVATE plastix)
+target_compile_options(ipc_multilayer PRIVATE -Wall -Wextra -Wpedantic)
