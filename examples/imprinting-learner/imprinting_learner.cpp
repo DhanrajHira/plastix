@@ -104,8 +104,7 @@ struct ImprintingLearnerForward {
   using Accumulator = Acc;
   static Acc Map(auto &U, size_t, size_t SrcId, auto &C, size_t ConnId,
                  auto &) {
-    return {plastix::GetField<plastix::WeightTag>(C, ConnId) *
-                plastix::GetField<plastix::ActivationTag>(U, SrcId),
+    return {plastix::GetWeight(C, ConnId) * plastix::GetActivation(U, SrcId),
             1};
   }
   static Acc Combine(Acc A, Acc B) {
@@ -128,7 +127,7 @@ struct ImprintingLearnerForward {
     uint32_t D = GetField<Delay>(U, Id);
 
     // Should we activate this step?
-    GetField<plastix::ActivationTag>(U, Id) = P & 0x1;
+    plastix::GetActivation(U, Id) = P & 0x1;
     P = (P >> 1);
 
     // Should we set up a new trigger?
@@ -141,7 +140,7 @@ struct ImprintingLearnerForward {
   static void ApplyOutput(auto &U, size_t Id, Acc Acc,
                           ImprintingLearnerGlobals &G) {
 
-    plastix::GetField<plastix::ActivationTag>(U, Id) = Acc.Activation;
+    plastix::GetActivation(U, Id) = Acc.Activation;
     G.V = Acc.Activation;
   }
 
@@ -151,7 +150,7 @@ struct ImprintingLearnerForward {
     // Activate if our acc is larger than our threshold.
     int Act = static_cast<int>((Acc.Activation / Acc.NumConns) > Threshold);
     G.WasActive |= (Act != 0);
-    GetField<plastix::ActivationTag>(U, Id) = Act;
+    plastix::GetActivation(U, Id) = Act;
   }
 };
 
@@ -197,9 +196,9 @@ struct ImprintingLearnerConnUpdate {
     if (GetField<UKindTag>(U, DstId) != UK_Output)
       return;
 
-    const float F = GetField<ActivationTag>(U, SrcId);
+    const float F = GetActivation(U, SrcId);
 
-    float &W = GetField<WeightTag>(C, ConnId);
+    float &W = GetWeight(C, ConnId);
     float &Z = GetField<ZTag>(C, ConnId);
     float &Zd = GetField<ZDeltaTag>(C, ConnId);
     float &Dw = GetField<DeltaWTag>(C, ConnId);
@@ -247,7 +246,7 @@ struct ImprintingLearnerConnUpdate {
     using namespace plastix;
     if (GetField<UKindTag>(U, DstId) != UK_Output)
       return;
-    const float F = GetField<ActivationTag>(U, SrcId);
+    const float F = GetActivation(U, SrcId);
 
     float &Z = GetField<ZTag>(C, ConnId);
     float &Zd = GetField<ZDeltaTag>(C, ConnId);
@@ -302,7 +301,7 @@ struct ImprintingLearnerAddUnit {
       float Threshold =
           Thresholds[std::uniform_int_distribution<int>{0, 4}(G.Rng)];
       GetField<ActThreshold>(U, Id) = Threshold;
-      GetField<plastix::ActivationTag>(U, Id) = 1.0f;
+      plastix::GetActivation(U, Id) = 1.0f;
     } else {
       int D = std::uniform_int_distribution<int>{1, 20}(G.Rng);
       GetField<Delay>(U, Id) = D;
@@ -329,8 +328,7 @@ struct ImprintingLearnerAddConn {
     if (CandidateKind == UK_Output)
       return false;
 
-    auto CandidateWasActive =
-        GetField<plastix::ActivationTag>(U, Candidate) != 0;
+    auto CandidateWasActive = plastix::GetActivation(U, Candidate) != 0;
 
     bool CandidateWasTenured = GetField<Tenure>(U, Candidate) == TS_Tenured;
 
@@ -373,9 +371,9 @@ struct ImprintingLearnerAddConn {
                              ImprintingLearnerGlobals &) {
     UnitKind ToKind = GetField<UKindTag>(UA, To);
     if (ToKind == UK_Output) {
-      GetField<plastix::WeightTag>(CA, Conn) = 0.0;
+      plastix::GetWeight(CA, Conn) = 0.0;
     } else {
-      GetField<plastix::WeightTag>(CA, Conn) = 1.0;
+      plastix::GetWeight(CA, Conn) = 1.0;
     }
   }
 };

@@ -13,14 +13,13 @@ struct LinearForwardPass {
 
   static float Map(auto &U, size_t, size_t SrcId, auto &C, size_t ConnId,
                    auto &) {
-    return plastix::GetField<plastix::WeightTag>(C, ConnId) *
-           plastix::GetField<plastix::ActivationTag>(U, SrcId);
+    return plastix::GetWeight(C, ConnId) * plastix::GetActivation(U, SrcId);
   }
 
   static float Combine(float A, float B) { return A + B; }
 
   static void Apply(auto &U, size_t Id, auto &, float Accumulated) {
-    plastix::GetField<plastix::ActivationTag>(U, Id) = Accumulated;
+    plastix::GetActivation(U, Id) = Accumulated;
   }
 };
 
@@ -31,10 +30,9 @@ struct LinearForwardPass {
 struct GradientDescentConn {
   static void UpdateIncomingConnection(auto &U, size_t DstId, size_t SrcId,
                                        auto &C, size_t ConnId, auto &) {
-    float Grad = plastix::GetField<plastix::BackwardAccTag>(U, DstId);
-    float Input = plastix::GetField<plastix::ActivationTag>(U, SrcId);
-    plastix::GetField<plastix::WeightTag>(C, ConnId) -=
-        LearningRate * Grad * Input;
+    float Grad = plastix::GetBackwardAcc(U, DstId);
+    float Input = plastix::GetActivation(U, SrcId);
+    plastix::GetWeight(C, ConnId) -= LearningRate * Grad * Input;
   }
 
   static void UpdateOutgoingConnection(auto &, size_t, size_t, auto &, size_t,
@@ -94,7 +92,7 @@ int main() {
   for (size_t C = 0; C < CA.Size(); ++C) {
     if (C > 0)
       std::cout << ", ";
-    std::cout << plastix::GetField<plastix::WeightTag>(CA, C);
+    std::cout << plastix::GetWeight(CA, C);
   }
   std::cout << "]\n";
 

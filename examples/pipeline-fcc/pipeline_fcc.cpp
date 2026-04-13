@@ -11,14 +11,13 @@ struct IdentityForwardPass {
 
   static float Map(auto &U, size_t, size_t SrcId, auto &C, size_t ConnId,
                    auto &) {
-    return plastix::GetField<plastix::WeightTag>(C, ConnId) *
-           plastix::GetField<plastix::ActivationTag>(U, SrcId);
+    return plastix::GetWeight(C, ConnId) * plastix::GetActivation(U, SrcId);
   }
 
   static float Combine(float A, float B) { return A + B; }
 
   static void Apply(auto &U, size_t Id, auto &, float Accumulated) {
-    plastix::GetField<plastix::ActivationTag>(U, Id) = Accumulated;
+    plastix::GetActivation(U, Id) = Accumulated;
   }
 };
 
@@ -33,7 +32,7 @@ struct PipelineFccTraits : plastix::DefaultNetworkTraits<> {
 
 struct HalfWeightInit {
   void operator()(auto &CA, auto Id) const {
-    plastix::GetField<plastix::WeightTag>(CA, Id) = 0.5f;
+    plastix::GetWeight(CA, Id) = 0.5f;
   }
 };
 
@@ -45,20 +44,19 @@ static void PrintActivations(PipelineNetwork &Net, size_t NumInput,
   auto &UA = Net.GetUnitAlloc();
   std::cout << "  inputs  = [";
   for (size_t I = 0; I < NumInput; ++I) {
-    std::cout << plastix::GetField<plastix::ActivationTag>(UA, I);
+    std::cout << plastix::GetActivation(UA, I);
     if (I + 1 < NumInput)
       std::cout << ", ";
   }
   std::cout << "]\n  hidden  = [";
   for (size_t I = 0; I < NumHidden; ++I) {
-    std::cout << plastix::GetField<plastix::ActivationTag>(UA, NumInput + I);
+    std::cout << plastix::GetActivation(UA, NumInput + I);
     if (I + 1 < NumHidden)
       std::cout << ", ";
   }
   std::cout << "]\n  outputs = [";
   for (size_t I = 0; I < NumOutput; ++I) {
-    std::cout << plastix::GetField<plastix::ActivationTag>(
-        UA, NumInput + NumHidden + I);
+    std::cout << plastix::GetActivation(UA, NumInput + NumHidden + I);
     if (I + 1 < NumOutput)
       std::cout << ", ";
   }

@@ -18,13 +18,11 @@ struct SigmoidForwardPass {
 
   static float Map(auto &U, size_t, size_t SrcId, auto &C, size_t ConnId,
                    auto &) {
-    return plastix::GetField<plastix::WeightTag>(C, ConnId) *
-           plastix::GetField<plastix::ActivationTag>(U, SrcId);
+    return plastix::GetWeight(C, ConnId) * plastix::GetActivation(U, SrcId);
   }
   static float Combine(float A, float B) { return A + B; }
   static void Apply(auto &U, size_t Id, auto &, float Accumulated) {
-    plastix::GetField<plastix::ActivationTag>(U, Id) =
-        1.0f / (1.0f + std::exp(-Accumulated));
+    plastix::GetActivation(U, Id) = 1.0f / (1.0f + std::exp(-Accumulated));
   }
 };
 
@@ -38,12 +36,12 @@ struct SigmoidBackwardPass {
 
   static float Map(auto &U, size_t, size_t ToId, auto &C, size_t ConnId,
                    auto &) {
-    return plastix::GetField<plastix::WeightTag>(C, ConnId) *
+    return plastix::GetWeight(C, ConnId) *
            plastix::GetField<GradPreActTag>(U, ToId);
   }
   static float Combine(float A, float B) { return A + B; }
   static void Apply(auto &U, size_t Id, auto &, float Accumulated) {
-    float A = plastix::GetField<plastix::ActivationTag>(U, Id);
+    float A = plastix::GetActivation(U, Id);
     plastix::GetField<GradPreActTag>(U, Id) = Accumulated * A * (1.0f - A);
   }
 };
@@ -53,9 +51,8 @@ struct GradientDescentConn {
   static void UpdateIncomingConnection(auto &U, size_t DstId, size_t SrcId,
                                        auto &C, size_t ConnId, auto &) {
     float Grad = plastix::GetField<GradPreActTag>(U, DstId);
-    float Input = plastix::GetField<plastix::ActivationTag>(U, SrcId);
-    plastix::GetField<plastix::WeightTag>(C, ConnId) -=
-        LearningRate * Grad * Input;
+    float Input = plastix::GetActivation(U, SrcId);
+    plastix::GetWeight(C, ConnId) -= LearningRate * Grad * Input;
   }
   static void UpdateOutgoingConnection(auto &, size_t, size_t, auto &, size_t,
                                        auto &) {}

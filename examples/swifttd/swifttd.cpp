@@ -75,12 +75,11 @@ struct SwiftTDForward {
   using Accumulator = float;
   static float Map(auto &U, size_t, size_t SrcId, auto &C, size_t ConnId,
                    auto &) {
-    return plastix::GetField<plastix::WeightTag>(C, ConnId) *
-           plastix::GetField<plastix::ActivationTag>(U, SrcId);
+    return plastix::GetWeight(C, ConnId) * plastix::GetActivation(U, SrcId);
   }
   static float Combine(float A, float B) { return A + B; }
   static void Apply(auto &U, size_t Id, auto &G, float Acc) {
-    plastix::GetField<plastix::ActivationTag>(U, Id) = Acc;
+    plastix::GetActivation(U, Id) = Acc;
     G.V = Acc;
   }
 };
@@ -107,9 +106,9 @@ struct SwiftTDUpdate {
   static void UpdateIncomingConnection(auto &U, size_t /*DstId*/, size_t SrcId,
                                        auto &C, size_t ConnId, auto &G) {
     using namespace plastix;
-    const float F = GetField<ActivationTag>(U, SrcId);
+    const float F = GetActivation(U, SrcId);
 
-    float &W = GetField<WeightTag>(C, ConnId);
+    float &W = GetWeight(C, ConnId);
     float &Z = GetField<ZTag>(C, ConnId);
     float &Zd = GetField<ZDeltaTag>(C, ConnId);
     float &Dw = GetField<DeltaWTag>(C, ConnId);
@@ -153,7 +152,7 @@ struct SwiftTDUpdate {
   static void UpdateOutgoingConnection(auto &U, size_t SrcId, size_t /*DstId*/,
                                        auto &C, size_t ConnId, auto &G) {
     using namespace plastix;
-    const float F = GetField<ActivationTag>(U, SrcId);
+    const float F = GetActivation(U, SrcId);
 
     float &Z = GetField<ZTag>(C, ConnId);
     float &Zd = GetField<ZDeltaTag>(C, ConnId);

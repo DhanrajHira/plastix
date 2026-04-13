@@ -39,9 +39,7 @@ struct RandomUniformWeight {
   RandomUniformWeight(uint32_t Seed = 0, float Min = -1.0f, float Max = 1.0f)
       : Rng(Seed), Dist(Min, Max) {}
 
-  void operator()(auto &CA, auto Id) const {
-    GetField<WeightTag>(CA, Id) = Dist(Rng);
-  }
+  void operator()(auto &CA, auto Id) const { GetWeight(CA, Id) = Dist(Rng); }
 
 private:
   mutable std::mt19937 Rng;
@@ -57,14 +55,14 @@ struct FullyConnected {
   template <typename UnitAlloc, typename ConnAlloc>
   UnitRange operator()(UnitAlloc &UA, ConnAlloc &CA,
                        UnitRange PrevLayer) const {
-    uint16_t NewLevel = GetField<LevelTag>(UA, PrevLayer.Begin) + 1;
+    uint16_t NewLevel = GetLevel(UA, PrevLayer.Begin) + 1;
     UnitRange Units = UA.AllocateMany(NumUnits);
     for (auto Id : Units.Ids()) {
-      GetField<LevelTag>(UA, Id) = NewLevel;
+      GetLevel(UA, Id) = NewLevel;
       InitUnit(UA, Id);
     }
 
-    uint16_t SrcLevel = GetField<LevelTag>(UA, PrevLayer.Begin);
+    uint16_t SrcLevel = GetLevel(UA, PrevLayer.Begin);
     for (auto U : Units.Ids()) {
       for (auto Src : PrevLayer.Ids()) {
         auto ConnId = CA.Allocate();

@@ -14,6 +14,20 @@ struct BackwardAccTag {};
 struct PrunedTag {};
 struct LevelTag {};
 
+// Convenience accessors for built-in unit fields.
+constexpr auto &GetActivation(auto &Alloc, size_t Id) {
+  return GetField<ActivationTag>(Alloc, Id);
+}
+constexpr auto &GetForwardAcc(auto &Alloc, size_t Id) {
+  return GetField<ForwardAccTag>(Alloc, Id);
+}
+constexpr auto &GetBackwardAcc(auto &Alloc, size_t Id) {
+  return GetField<BackwardAccTag>(Alloc, Id);
+}
+constexpr auto &GetLevel(auto &Alloc, size_t Id) {
+  return GetField<LevelTag>(Alloc, Id);
+}
+
 // Type list for user-defined extra unit fields.
 template <typename... Fields> struct UnitFieldList {};
 

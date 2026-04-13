@@ -17,6 +17,11 @@ struct SrcLevelTag {};
 // Convenience tag for the common Weight field (user-provided, not core).
 struct WeightTag {};
 
+// Convenience accessor for the common Weight field.
+constexpr auto &GetWeight(auto &Alloc, size_t Id) {
+  return GetField<WeightTag>(Alloc, Id);
+}
+
 // Type list for user-defined extra connection fields.
 template <typename... Fields> struct ConnFieldList {};
 
