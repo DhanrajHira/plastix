@@ -103,7 +103,7 @@ public:
     using Acc = typename FP::Accumulator;
 
     for (size_t I = 0; I < NumInput; ++I)
-      GetField<ActivationTag>(UnitAlloc, I) = Inputs[I];
+      GetActivation(UnitAlloc, I) = Inputs[I];
 
     if constexpr (Traits::Model == Propagation::Topological) {
       if (NeedsResort)
@@ -115,15 +115,15 @@ public:
             continue;
           auto ToId = GetField<ToIdTag>(ConnAlloc, C);
           auto FromId = GetField<FromIdTag>(ConnAlloc, C);
-          auto &UAcc = GetField<ForwardAccTag>(UnitAlloc, ToId);
+          auto &UAcc = GetForwardAcc(UnitAlloc, ToId);
           UAcc = FP::Combine(
               UAcc, FP::Map(UnitAlloc, ToId, FromId, ConnAlloc, C, Globals));
         }
 
         size_t NumUnits = UnitAlloc.Size();
         for (size_t I = NumInput; I < NumUnits; ++I) {
-          if (GetField<LevelTag>(UnitAlloc, I) == L) {
-            auto &UAcc = GetField<ForwardAccTag>(UnitAlloc, I);
+          if (GetLevel(UnitAlloc, I) == L) {
+            auto &UAcc = GetForwardAcc(UnitAlloc, I);
             FP::Apply(UnitAlloc, I, Globals, UAcc);
             UAcc = Acc{};
           }
@@ -135,14 +135,14 @@ public:
           continue;
         auto ToId = GetField<ToIdTag>(ConnAlloc, C);
         auto FromId = GetField<FromIdTag>(ConnAlloc, C);
-        auto &UAcc = GetField<ForwardAccTag>(UnitAlloc, ToId);
+        auto &UAcc = GetForwardAcc(UnitAlloc, ToId);
         UAcc = FP::Combine(
             UAcc, FP::Map(UnitAlloc, ToId, FromId, ConnAlloc, C, Globals));
       }
 
       size_t NumUnits = UnitAlloc.Size();
       for (size_t I = NumInput; I < NumUnits; ++I) {
-        auto &UAcc = GetField<ForwardAccTag>(UnitAlloc, I);
+        auto &UAcc = GetForwardAcc(UnitAlloc, I);
         FP::Apply(UnitAlloc, I, Globals, UAcc);
         UAcc = Acc{};
       }
@@ -175,15 +175,15 @@ public:
               continue;
             auto ToId = GetField<ToIdTag>(ConnAlloc, C);
             auto FromId = GetField<FromIdTag>(ConnAlloc, C);
-            auto &UAcc = GetField<BackwardAccTag>(UnitAlloc, FromId);
+            auto &UAcc = GetBackwardAcc(UnitAlloc, FromId);
             UAcc = BP::Combine(
                 UAcc, BP::Map(UnitAlloc, FromId, ToId, ConnAlloc, C, Globals));
           }
 
           size_t NumUnits = UnitAlloc.Size();
           for (size_t I = NumInput; I < NumUnits; ++I) {
-            if (GetField<LevelTag>(UnitAlloc, I) == L) {
-              auto &UAcc = GetField<BackwardAccTag>(UnitAlloc, I);
+            if (GetLevel(UnitAlloc, I) == L) {
+              auto &UAcc = GetBackwardAcc(UnitAlloc, I);
               BP::Apply(UnitAlloc, I, Globals, UAcc);
               UAcc = Acc{};
             }
@@ -195,14 +195,14 @@ public:
             continue;
           auto ToId = GetField<ToIdTag>(ConnAlloc, C);
           auto FromId = GetField<FromIdTag>(ConnAlloc, C);
-          auto &UAcc = GetField<BackwardAccTag>(UnitAlloc, FromId);
+          auto &UAcc = GetBackwardAcc(UnitAlloc, FromId);
           UAcc = BP::Combine(
               UAcc, BP::Map(UnitAlloc, FromId, ToId, ConnAlloc, C, Globals));
         }
 
         size_t NumUnits = UnitAlloc.Size();
         for (size_t I = 0; I < NumUnits; ++I) {
-          auto &UAcc = GetField<BackwardAccTag>(UnitAlloc, I);
+          auto &UAcc = GetBackwardAcc(UnitAlloc, I);
           BP::Apply(UnitAlloc, I, Globals, UAcc);
           UAcc = Acc{};
         }
@@ -306,13 +306,12 @@ public:
       for (size_t I = 0; I < NumUnits; ++I) {
         auto Offset = AP::AddUnit(UnitAlloc, I, Globals);
         if (Offset.has_value()) {
-          int32_t Base = GetField<LevelTag>(UnitAlloc, I);
+          int32_t Base = GetLevel(UnitAlloc, I);
           int32_t NewLevel =
               std::clamp(Base + static_cast<int32_t>(*Offset), int32_t{1},
                          static_cast<int32_t>(MaxLevels - 1));
           auto NewId = UnitAlloc.Allocate();
-          GetField<LevelTag>(UnitAlloc, NewId) =
-              static_cast<uint16_t>(NewLevel);
+          GetLevel(UnitAlloc, NewId) = static_cast<uint16_t>(NewLevel);
           AP::InitUnit(UnitAlloc, NewId, I, Globals);
         }
       }
@@ -337,7 +336,7 @@ public:
       memset(LevelOffset, 0, (NumUnits + 1) * sizeof(uint32_t));
       uint16_t HighestLevel = 0;
       for (size_t I = 0; I < NumUnits; ++I) {
-        uint16_t Lvl = GetField<LevelTag>(UnitAlloc, I);
+        uint16_t Lvl = GetLevel(UnitAlloc, I);
         ++LevelOffset[Lvl];
         if (Lvl > HighestLevel)
           HighestLevel = Lvl;
@@ -353,7 +352,7 @@ public:
 
       memcpy(LevelWritePos, LevelOffset, (HighestLevel + 1) * sizeof(uint32_t));
       for (size_t I = 0; I < NumUnits; ++I) {
-        uint16_t Lvl = GetField<LevelTag>(UnitAlloc, I);
+        uint16_t Lvl = GetLevel(UnitAlloc, I);
         UnitsByLevel[LevelWritePos[Lvl]++] = static_cast<uint32_t>(I);
       }
 
@@ -428,8 +427,7 @@ public:
         auto ConnId = ConnAlloc.Allocate();
         GetField<FromIdTag>(ConnAlloc, ConnId) = F;
         GetField<ToIdTag>(ConnAlloc, ConnId) = T;
-        GetField<SrcLevelTag>(ConnAlloc, ConnId) =
-            GetField<LevelTag>(UnitAlloc, F);
+        GetField<SrcLevelTag>(ConnAlloc, ConnId) = GetLevel(UnitAlloc, F);
         AC::InitConnection(UnitAlloc, F, T, ConnAlloc, ConnId, Globals);
       }
 
@@ -457,7 +455,7 @@ public:
   }
 
   std::span<const float> GetOutput() const {
-    const float *Base = &GetField<ActivationTag>(UnitAlloc, OutputRange.Begin);
+    const float *Base = &GetActivation(UnitAlloc, OutputRange.Begin);
     return {Base, OutputRange.Size()};
   }
 
@@ -470,7 +468,7 @@ private:
     size_t NumConns = ConnAlloc.Size();
 
     for (size_t I = NumInput; I < NumUnits; ++I)
-      GetField<LevelTag>(UnitAlloc, I) = 0;
+      GetLevel(UnitAlloc, I) = 0;
 
     if (NumConns == 0)
       return;
@@ -527,8 +525,7 @@ private:
           size_t C = OutEdges[E];
           uint32_t To = GetField<ToIdTag>(ConnAlloc, C);
           if (--InDegree[To] == 0) {
-            GetField<LevelTag>(UnitAlloc, To) =
-                static_cast<uint16_t>(CurrentLevel + 1);
+            GetLevel(UnitAlloc, To) = static_cast<uint16_t>(CurrentLevel + 1);
             NextFrontier[NextSize++] = To;
           }
         }
@@ -550,7 +547,7 @@ private:
 
     for (size_t C = 0; C < N; ++C) {
       auto From = GetField<FromIdTag>(ConnAlloc, C);
-      GetField<SrcLevelTag>(ConnAlloc, C) = GetField<LevelTag>(UnitAlloc, From);
+      GetField<SrcLevelTag>(ConnAlloc, C) = GetLevel(UnitAlloc, From);
     }
 
     uint32_t Histogram[MaxLevels] = {};

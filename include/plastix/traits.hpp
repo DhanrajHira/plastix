@@ -109,11 +109,11 @@ struct DefaultForwardPass {
   using Accumulator = float;
   static float Map(auto &U, size_t, size_t SrcId, auto &C, size_t ConnId,
                    auto &) {
-    return GetField<WeightTag>(C, ConnId) * GetField<ActivationTag>(U, SrcId);
+    return GetWeight(C, ConnId) * GetActivation(U, SrcId);
   }
   static float Combine(float A, float B) { return A + B; }
   static void Apply(auto &U, size_t Id, auto &, float Accumulated) {
-    GetField<ActivationTag>(U, Id) = Accumulated;
+    GetActivation(U, Id) = Accumulated;
   }
 };
 
@@ -187,8 +187,8 @@ struct MSELoss {
                             std::span<const float> Targets, auto &) {
     size_t I = 0;
     for (size_t Id : Outputs.Ids()) {
-      float Pred = GetField<ActivationTag>(U, Id);
-      GetField<BackwardAccTag>(U, Id) = Pred - Targets[I++];
+      float Pred = GetActivation(U, Id);
+      GetBackwardAcc(U, Id) = Pred - Targets[I++];
     }
   }
 };
@@ -202,7 +202,7 @@ struct RMSLoss {
     float SumSq = 0.0f;
     size_t I = 0;
     for (size_t Id : Outputs.Ids()) {
-      float Diff = GetField<ActivationTag>(U, Id) - Targets[I++];
+      float Diff = GetActivation(U, Id) - Targets[I++];
       SumSq += Diff * Diff;
     }
     float N = static_cast<float>(Outputs.Size());
@@ -210,8 +210,8 @@ struct RMSLoss {
     float Denom = N * (Rms + 1e-8f);
     I = 0;
     for (size_t Id : Outputs.Ids()) {
-      float Pred = GetField<ActivationTag>(U, Id);
-      GetField<BackwardAccTag>(U, Id) = (Pred - Targets[I++]) / Denom;
+      float Pred = GetActivation(U, Id);
+      GetBackwardAcc(U, Id) = (Pred - Targets[I++]) / Denom;
     }
   }
 };
@@ -224,17 +224,17 @@ struct SoftmaxCrossEntropyLoss {
                             std::span<const float> Targets, auto &) {
     float Max = -std::numeric_limits<float>::infinity();
     for (size_t Id : Outputs.Ids()) {
-      float P = GetField<ActivationTag>(U, Id);
+      float P = GetActivation(U, Id);
       if (P > Max)
         Max = P;
     }
     float Sum = 0.0f;
     for (size_t Id : Outputs.Ids())
-      Sum += std::exp(GetField<ActivationTag>(U, Id) - Max);
+      Sum += std::exp(GetActivation(U, Id) - Max);
     size_t I = 0;
     for (size_t Id : Outputs.Ids()) {
-      float Soft = std::exp(GetField<ActivationTag>(U, Id) - Max) / Sum;
-      GetField<BackwardAccTag>(U, Id) = Soft - Targets[I++];
+      float Soft = std::exp(GetActivation(U, Id) - Max) / Sum;
+      GetBackwardAcc(U, Id) = Soft - Targets[I++];
     }
   }
 };

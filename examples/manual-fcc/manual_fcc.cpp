@@ -12,14 +12,13 @@ struct TanhForwardPass {
 
   static float Map(auto &U, size_t, size_t SrcId, auto &C, size_t ConnId,
                    auto &) {
-    return plastix::GetField<plastix::WeightTag>(C, ConnId) *
-           plastix::GetField<plastix::ActivationTag>(U, SrcId);
+    return plastix::GetWeight(C, ConnId) * plastix::GetActivation(U, SrcId);
   }
 
   static float Combine(float A, float B) { return A + B; }
 
   static void Apply(auto &U, size_t Id, auto &, float Accumulated) {
-    plastix::GetField<plastix::ActivationTag>(U, Id) = std::tanh(Accumulated);
+    plastix::GetActivation(U, Id) = std::tanh(Accumulated);
   }
 };
 
@@ -34,13 +33,12 @@ struct ManualLayerBuilder {
   template <typename UnitAlloc, typename ConnAlloc>
   plastix::UnitRange operator()(UnitAlloc &UA, ConnAlloc &CA,
                                 plastix::UnitRange PrevLayer) const {
-    uint16_t SrcLevel =
-        plastix::GetField<plastix::LevelTag>(UA, PrevLayer.Begin);
+    uint16_t SrcLevel = plastix::GetLevel(UA, PrevLayer.Begin);
     uint16_t NewLevel = SrcLevel + 1;
 
     plastix::UnitRange Units = UA.AllocateMany(NumUnits);
     for (auto Id : Units.Ids())
-      plastix::GetField<plastix::LevelTag>(UA, Id) = NewLevel;
+      plastix::GetLevel(UA, Id) = NewLevel;
 
     for (auto Dst : Units.Ids()) {
       for (auto Src : PrevLayer.Ids()) {
@@ -50,7 +48,7 @@ struct ManualLayerBuilder {
         plastix::GetField<plastix::ToIdTag>(CA, ConnId) =
             static_cast<uint32_t>(Dst);
         plastix::GetField<plastix::SrcLevelTag>(CA, ConnId) = SrcLevel;
-        plastix::GetField<plastix::WeightTag>(CA, ConnId) = InitialWeight;
+        plastix::GetWeight(CA, ConnId) = InitialWeight;
       }
     }
 
