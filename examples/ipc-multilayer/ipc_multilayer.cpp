@@ -124,8 +124,8 @@ constexpr float Gamma = 0.1f;
 // Activation function (tanh) and derivative
 // ---------------------------------------------------------------------------
 
-inline float Act(float X) { return std::tanh(X); }
-inline float ActDeriv(float X) {
+PLASTIX_HD float Act(float X) { return std::tanh(X); }
+PLASTIX_HD float ActDeriv(float X) {
   float T = std::tanh(X);
   return 1.0f - T * T;
 }
@@ -137,14 +137,14 @@ inline float ActDeriv(float X) {
 struct iPCForwardPass {
   using Accumulator = float;
 
-  static float Map(auto &U, size_t, size_t SrcId, auto &C, size_t ConnId,
-                   auto &) {
+  PLASTIX_HD static float Map(auto &U, size_t, size_t SrcId, auto &C,
+                              size_t ConnId, auto &) {
     return plastix::GetWeight(C, ConnId) * plastix::GetActivation(U, SrcId);
   }
 
-  static float Combine(float A, float B) { return A + B; }
+  PLASTIX_HD static float Combine(float A, float B) { return A + B; }
 
-  static void Apply(auto &U, size_t Id, auto &, float Mu) {
+  PLASTIX_HD static void Apply(auto &U, size_t Id, auto &, float Mu) {
     float X = plastix::GetField<ValueNodeTag>(U, Id);
     plastix::GetField<ErrorTag>(U, Id) = X - Mu;
   }
@@ -158,16 +158,16 @@ struct iPCBackwardPass {
   using Accumulator = float;
 
   // Accumulates Weight * eps(destination) into BackwardAcc(source).
-  static float Map(auto &U, size_t, size_t ToId, auto &C, size_t ConnId,
-                   auto &) {
+  PLASTIX_HD static float Map(auto &U, size_t, size_t ToId, auto &C,
+                              size_t ConnId, auto &) {
     return plastix::GetWeight(C, ConnId) * plastix::GetField<ErrorTag>(U, ToId);
   }
 
-  static float Combine(float A, float B) { return A + B; }
+  PLASTIX_HD static float Combine(float A, float B) { return A + B; }
 
   // For hidden units: store bottom-up signal f'(x) * BackwardAcc.
   // Input/output units are clamped — skip them.
-  static void Apply(auto &U, size_t Id, auto &, float BackwardAcc) {
+  PLASTIX_HD static void Apply(auto &U, size_t Id, auto &, float BackwardAcc) {
     if (Id >= HiddenBegin && Id < HiddenEnd) {
       float X = plastix::GetField<ValueNodeTag>(U, Id);
       plastix::GetField<BottomUpTag>(U, Id) = ActDeriv(X) * BackwardAcc;
@@ -180,8 +180,9 @@ struct iPCBackwardPass {
 // ---------------------------------------------------------------------------
 
 struct iPCUpdateConn {
-  static void UpdateIncomingConnection(auto &U, size_t DstId, size_t SrcId,
-                                       auto &C, size_t ConnId, auto &) {
+  PLASTIX_HD static void UpdateIncomingConnection(auto &U, size_t DstId,
+                                                  size_t SrcId, auto &C,
+                                                  size_t ConnId, auto &) {
     float Eps = plastix::GetField<ErrorTag>(U, DstId);
     float XSrc = plastix::GetField<ValueNodeTag>(U, SrcId);
     // Input units use identity activation; hidden units use tanh.
@@ -189,8 +190,8 @@ struct iPCUpdateConn {
     plastix::GetWeight(C, ConnId) += Alpha * Eps * Fx;
   }
 
-  static void UpdateOutgoingConnection(auto &, size_t, size_t, auto &, size_t,
-                                       auto &) {}
+  PLASTIX_HD static void UpdateOutgoingConnection(auto &, size_t, size_t,
+                                                  auto &, size_t, auto &) {}
 };
 
 // ---------------------------------------------------------------------------

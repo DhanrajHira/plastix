@@ -88,14 +88,14 @@ constexpr float Alpha = 0.01f;
 struct iPCForwardPass {
   using Accumulator = float;
 
-  static float Map(auto &U, size_t, size_t SrcId, auto &C, size_t ConnId,
-                   auto &) {
+  PLASTIX_HD static float Map(auto &U, size_t, size_t SrcId, auto &C,
+                              size_t ConnId, auto &) {
     return plastix::GetWeight(C, ConnId) * plastix::GetActivation(U, SrcId);
   }
 
-  static float Combine(float A, float B) { return A + B; }
+  PLASTIX_HD static float Combine(float A, float B) { return A + B; }
 
-  static void Apply(auto &U, size_t Id, auto &, float Mu) {
+  PLASTIX_HD static void Apply(auto &U, size_t Id, auto &, float Mu) {
     float X = plastix::GetField<ValueNodeTag>(U, Id);
     plastix::GetField<ErrorTag>(U, Id) = X - Mu;
   }
@@ -106,15 +106,16 @@ struct iPCForwardPass {
 // ---------------------------------------------------------------------------
 
 struct iPCUpdateConn {
-  static void UpdateIncomingConnection(auto &U, size_t DstId, size_t SrcId,
-                                       auto &C, size_t ConnId, auto &) {
+  PLASTIX_HD static void UpdateIncomingConnection(auto &U, size_t DstId,
+                                                  size_t SrcId, auto &C,
+                                                  size_t ConnId, auto &) {
     float Eps = plastix::GetField<ErrorTag>(U, DstId);
     float Fx = plastix::GetField<ValueNodeTag>(U, SrcId); // f = identity
     plastix::GetWeight(C, ConnId) += Alpha * Eps * Fx;
   }
 
-  static void UpdateOutgoingConnection(auto &, size_t, size_t, auto &, size_t,
-                                       auto &) {}
+  PLASTIX_HD static void UpdateOutgoingConnection(auto &, size_t, size_t,
+                                                  auto &, size_t, auto &) {}
 };
 
 // ---------------------------------------------------------------------------

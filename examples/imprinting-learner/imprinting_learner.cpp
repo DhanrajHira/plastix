@@ -396,6 +396,14 @@ struct ImprintingLearnerTraits
   using ResetGlobal = ImprintingLearnerResetGlobal;
   using AddUnit = ImprintingLearnerAddUnit;
   using AddConn = ImprintingLearnerAddConn;
+  // ImprintingLearnerConnUpdate writes `G.Tau`, `G.B`, `G.VDelta` from every
+  // thread (unsafe reduction); InitUnit / HandleConnsToOutput use std::cout
+  // which isn't device-callable. Keep update on the host. AddUnit mutates
+  // `G.GenerationLeft` / `G.Tau` non-atomically and InitUnit prints + draws
+  // RNG from a host-side `std::bernoulli_distribution`, so add stays on
+  // the host as well.
+  static constexpr bool KernelizeUpdate = false;
+  static constexpr bool KernelizeAdd = false;
 
   using ExtraConnFields = plastix::ConnFieldList<
       plastix::alloc::SOAField<plastix::WeightTag, float>,
