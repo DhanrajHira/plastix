@@ -1,16 +1,46 @@
 #ifndef PLASTIX_ALLOC_HPP
 #define PLASTIX_ALLOC_HPP
 
+#include "plastix/macros.hpp"
+
 #include <algorithm>
-#include <atomic>
 #include <cstddef>
-#include <sys/mman.h>
+#include <new>
 #include <tuple>
 #include <utility>
 
+#ifdef PLASTIX_HAS_CUDA
+#include <cstdio>
+#include <cstdlib>
+#include <cuda/std/atomic>
+#include <cuda_runtime.h>
+#define PLASTIX_CUDA_CHECK(stmt)                                               \
+  do {                                                                         \
+    cudaError_t Err__ = (stmt);                                                \
+    if (Err__ != cudaSuccess) {                                                \
+      std::fprintf(stderr, "CUDA error at %s:%d: %s\n", __FILE__, __LINE__,    \
+                   cudaGetErrorString(Err__));                                 \
+      std::abort();                                                            \
+    }                                                                          \
+  } while (0)
+#else
+#include <atomic>
+#include <sys/mman.h>
+#endif
+
 namespace plastix {
 namespace alloc {
+
 template <typename T> using AllocId = size_t;
+
+// Atomic backing for `Count`. Under CUDA we need libcu++ so the same atomic
+// can be touched from both host and device kernels. Outside CUDA the standard
+// std::atomic is fine.
+#ifdef PLASTIX_HAS_CUDA
+using AtomicCount = cuda::std::atomic<size_t>;
+#else
+using AtomicCount = std::atomic<size_t>;
+#endif
 
 template <typename FieldTag, typename T>
 
@@ -23,12 +53,53 @@ struct SOAField {
   using Type = T;
 };
 
+// Storage backend abstraction. Under PLASTIX_HAS_CUDA we use
+// cudaMallocManaged so the same pointer is valid from both host and device.
+// This is a deliberate deviation from the explicit-copy plan in
+// notes/gpu-architecture.md: managed memory is significantly simpler to
+// reason about, keeps the SOA API contract identical between backends, and
+// is a reasonable starting point for an MVP. Tightening to explicit copies
+// can be done later without churning user-facing code.
+// TODO(plastix-gpu): switch to explicit cudaMalloc + staging copies.
+namespace detail {
+
+inline void *AllocStorage(size_t Bytes) {
+#ifdef PLASTIX_HAS_CUDA
+  void *P = nullptr;
+  PLASTIX_CUDA_CHECK(cudaMallocManaged(&P, Bytes));
+  PLASTIX_CUDA_CHECK(cudaMemset(P, 0, Bytes));
+  return P;
+#else
+  return mmap(nullptr, Bytes, PROT_READ | PROT_WRITE,
+              MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
+#endif
+}
+
+inline void FreeStorage(void *P, size_t Bytes) {
+#ifdef PLASTIX_HAS_CUDA
+  (void)Bytes;
+  if (P)
+    PLASTIX_CUDA_CHECK(cudaFree(P));
+#else
+  if (P)
+    munmap(P, Bytes);
+#endif
+}
+
+} // namespace detail
+
 template <typename T, typename... Fields> class SOAAllocator {
   std::tuple<typename Fields::Type *...> FieldPtrs;
   std::tuple<typename Fields::Type *...> BackFieldPtrs;
   size_t *PermScratch;
-  std::atomic<size_t> Count;
+  // Heap allocation so the atomic lives in managed memory (for CUDA) and the
+  // allocator object itself stays trivially movable across host/device.
+  AtomicCount *CountPtr;
   size_t Capacity;
+  // True for the unique owning instance constructed via `SOAAllocator(N)`.
+  // Shallow copies (used to pass the allocator by value into CUDA kernels)
+  // share the same backing pointers but must not free them on destruction.
+  bool Owns;
 
   template <typename FieldTag> constexpr static size_t IndexOf() {
     size_t I = 0;
@@ -37,36 +108,80 @@ template <typename T, typename... Fields> class SOAAllocator {
     return I;
   }
 
+  static constexpr size_t MaxFieldSize() {
+    return std::max({sizeof(typename Fields::Type)...});
+  }
+
 public:
+  // Mark host/device callable accessors. The hot loop inside CUDA kernels
+  // calls Get<Tag>() per element, so it must be device-callable.
   explicit SOAAllocator(size_t NumElements)
-      : FieldPtrs{}, BackFieldPtrs{}, PermScratch{nullptr}, Count{0},
-        Capacity{NumElements} {
-    constexpr size_t MaxFieldSize =
-        std::max({sizeof(typename Fields::Type)...});
-    size_t ArenaSize = NumElements * MaxFieldSize;
-    auto MmapArena = [ArenaSize]() {
-      return mmap(nullptr, ArenaSize, PROT_READ | PROT_WRITE,
-                  MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
-    };
+      : FieldPtrs{}, BackFieldPtrs{}, PermScratch{nullptr}, CountPtr{nullptr},
+        Capacity{NumElements}, Owns{true} {
+    size_t ArenaSize = NumElements * MaxFieldSize();
     std::apply(
-        [&MmapArena](auto &...Ptrs) {
-          ((Ptrs = static_cast<decltype(+Ptrs)>(MmapArena())), ...);
+        [ArenaSize](auto &...Ptrs) {
+          ((Ptrs =
+                static_cast<decltype(+Ptrs)>(detail::AllocStorage(ArenaSize))),
+           ...);
         },
         FieldPtrs);
     std::apply(
-        [&MmapArena](auto &...Ptrs) {
-          ((Ptrs = static_cast<decltype(+Ptrs)>(MmapArena())), ...);
+        [ArenaSize](auto &...Ptrs) {
+          ((Ptrs =
+                static_cast<decltype(+Ptrs)>(detail::AllocStorage(ArenaSize))),
+           ...);
         },
         BackFieldPtrs);
     PermScratch = static_cast<size_t *>(
-        mmap(nullptr, NumElements * sizeof(size_t), PROT_READ | PROT_WRITE,
-             MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0));
+        detail::AllocStorage(NumElements * sizeof(size_t)));
+    CountPtr = static_cast<AtomicCount *>(
+        detail::AllocStorage(sizeof(AtomicCount)));
+    // Placement-new the atomic in (already zero-initialized) storage.
+    ::new (CountPtr) AtomicCount{0};
   }
 
-  AllocId<T> Allocate() {
-    size_t Id = Count.fetch_add(1);
+  // Host-only destructor body. The shallow-copy path (kernel parameters) lands
+  // inside __device__ contexts where cudaFree is unavailable; the device
+  // path is deliberately empty. The host-side owning instance is responsible
+  // for the eventual free.
+  ~SOAAllocator() {
+#ifndef __CUDA_ARCH__
+    if (!Owns)
+      return;
+    if (CountPtr)
+      CountPtr->~AtomicCount();
+    detail::FreeStorage(CountPtr, sizeof(AtomicCount));
+    size_t ArenaSize = Capacity * MaxFieldSize();
+    std::apply(
+        [ArenaSize](auto *...Ptrs) {
+          ((detail::FreeStorage(Ptrs, ArenaSize)), ...);
+        },
+        FieldPtrs);
+    std::apply(
+        [ArenaSize](auto *...Ptrs) {
+          ((detail::FreeStorage(Ptrs, ArenaSize)), ...);
+        },
+        BackFieldPtrs);
+    detail::FreeStorage(PermScratch, Capacity * sizeof(size_t));
+#endif
+  }
+
+  // Shallow copy: shares pointers, does NOT take ownership. Used to hand the
+  // allocator into a CUDA kernel by value. Move + assign remain disabled
+  // because there's no use case for them in the framework.
+  PLASTIX_HD SOAAllocator(const SOAAllocator &Other) noexcept
+      : FieldPtrs{Other.FieldPtrs}, BackFieldPtrs{Other.BackFieldPtrs},
+        PermScratch{Other.PermScratch}, CountPtr{Other.CountPtr},
+        Capacity{Other.Capacity}, Owns{false} {}
+  SOAAllocator &operator=(const SOAAllocator &) = delete;
+  SOAAllocator(SOAAllocator &&) = delete;
+  SOAAllocator &operator=(SOAAllocator &&) = delete;
+
+  PLASTIX_HD AllocId<T> Allocate() {
+    size_t Id = CountPtr->fetch_add(1);
     if (Id >= Capacity) {
-      Count.fetch_sub(1);
+      CountPtr->fetch_sub(1);
       return static_cast<size_t>(-1);
     }
     std::apply(
@@ -83,9 +198,9 @@ public:
   };
 
   std::pair<size_t, size_t> AllocateMany(size_t N) {
-    size_t Begin = Count.fetch_add(N);
+    size_t Begin = CountPtr->fetch_add(N);
     if (Begin + N > Capacity) {
-      Count.fetch_sub(N);
+      CountPtr->fetch_sub(N);
       return {static_cast<size_t>(-1), static_cast<size_t>(-1)};
     }
     for (size_t Id = Begin; Id < Begin + N; ++Id) {
@@ -103,44 +218,44 @@ public:
     return {Begin, Begin + N};
   }
 
-  template <typename FieldTag> auto &Get(AllocId<T> Id) {
+  template <typename FieldTag> PLASTIX_HD auto &Get(AllocId<T> Id) {
     constexpr auto Index = IndexOf<FieldTag>();
     const auto &Field = std::get<Index>(FieldPtrs);
     return Field[Id];
   };
 
-  template <typename FieldTag> const auto &Get(AllocId<T> Id) const {
+  template <typename FieldTag> PLASTIX_HD const auto &Get(AllocId<T> Id) const {
     constexpr auto Index = IndexOf<FieldTag>();
     const auto &Field = std::get<Index>(FieldPtrs);
     return Field[Id];
   };
 
-  auto &Get(AllocId<T> Id)
+  PLASTIX_HD auto &Get(AllocId<T> Id)
     requires(sizeof...(Fields) == 1)
   {
     return std::get<0>(FieldPtrs)[Id];
   };
 
-  const auto &Get(AllocId<T> Id) const
+  PLASTIX_HD const auto &Get(AllocId<T> Id) const
     requires(sizeof...(Fields) == 1)
   {
     return std::get<0>(FieldPtrs)[Id];
   };
 
-  template <typename FieldTag> auto *GetArrayFor() {
+  template <typename FieldTag> PLASTIX_HD auto *GetArrayFor() {
     constexpr auto Index = IndexOf<FieldTag>();
     return std::get<Index>(FieldPtrs);
   }
 
-  template <typename FieldTag> const auto *GetArrayFor() const {
+  template <typename FieldTag> PLASTIX_HD const auto *GetArrayFor() const {
     constexpr auto Index = IndexOf<FieldTag>();
     return std::get<Index>(FieldPtrs);
   }
 
-  size_t Size() const { return Count.load(); }
-  size_t GetCapacity() const { return Capacity; }
+  PLASTIX_HD size_t Size() const { return CountPtr->load(); }
+  PLASTIX_HD size_t GetCapacity() const { return Capacity; }
 
-  size_t *PermutationScratch() { return PermScratch; }
+  PLASTIX_HD size_t *PermutationScratch() { return PermScratch; }
 
   void Gather(size_t N) {
     auto GatherField = [this, N](auto *Src, auto *Dst) {
@@ -162,7 +277,8 @@ public:
 // `.template` disambiguator when the allocator is a dependent type (e.g.
 // `auto &` policy parameters) and reads a bit cleaner at call sites.
 // Const-propagates via auto& deduction.
-template <typename Tag> constexpr auto &GetField(auto &Alloc, size_t Id) {
+template <typename Tag>
+PLASTIX_HD constexpr auto &GetField(auto &Alloc, size_t Id) {
   return Alloc.template Get<Tag>(Id);
 }
 
