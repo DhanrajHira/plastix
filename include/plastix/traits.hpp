@@ -3,6 +3,7 @@
 
 #include "plastix/conn.hpp"
 #include "plastix/layers.hpp"
+#include "plastix/macros.hpp"
 #include "plastix/unit_state.hpp"
 #include <cmath>
 #include <concepts>
@@ -107,12 +108,12 @@ concept LossPolicy =
 
 struct DefaultForwardPass {
   using Accumulator = float;
-  static float Map(auto &U, size_t, size_t SrcId, auto &C, size_t ConnId,
-                   auto &) {
+  PLASTIX_HD static float Map(auto &U, size_t, size_t SrcId, auto &C,
+                              size_t ConnId, auto &) {
     return GetWeight(C, ConnId) * GetActivation(U, SrcId);
   }
-  static float Combine(float A, float B) { return A + B; }
-  static void Apply(auto &U, size_t Id, auto &, float Accumulated) {
+  PLASTIX_HD static float Combine(float A, float B) { return A + B; }
+  PLASTIX_HD static void Apply(auto &U, size_t Id, auto &, float Accumulated) {
     GetActivation(U, Id) = Accumulated;
   }
 };
@@ -121,53 +122,57 @@ struct DefaultForwardPass {
 // out the entire loop body via if constexpr when these are detected.
 struct NoBackwardPass {
   using Accumulator = float;
-  static float Map(auto &, size_t, size_t, auto &, size_t, auto &) {
+  PLASTIX_HD static float Map(auto &, size_t, size_t, auto &, size_t, auto &) {
     return 0.0f;
   }
-  static float Combine(float A, float B) { return A + B; }
-  static void Apply(auto &, size_t, auto &, float) {}
+  PLASTIX_HD static float Combine(float A, float B) { return A + B; }
+  PLASTIX_HD static void Apply(auto &, size_t, auto &, float) {}
 };
 
 struct NoUpdateUnit {
-  static void Update(auto &, size_t, auto &) {}
+  PLASTIX_HD static void Update(auto &, size_t, auto &) {}
 };
 
 struct NoUpdateConn {
-  static void UpdateIncomingConnection(auto &, size_t, size_t, auto &, size_t,
-                                       auto &) {}
-  static void UpdateOutgoingConnection(auto &, size_t, size_t, auto &, size_t,
-                                       auto &) {}
+  PLASTIX_HD static void UpdateIncomingConnection(auto &, size_t, size_t,
+                                                  auto &, size_t, auto &) {}
+  PLASTIX_HD static void UpdateOutgoingConnection(auto &, size_t, size_t,
+                                                  auto &, size_t, auto &) {}
 };
 
 struct NoPruneUnit {
-  static bool ShouldPrune(auto &, size_t, auto &) { return false; }
+  PLASTIX_HD static bool ShouldPrune(auto &, size_t, auto &) { return false; }
 };
 
 struct NoPruneConn {
-  static bool ShouldPrune(auto &, size_t, size_t, auto &, size_t, auto &) {
+  PLASTIX_HD static bool ShouldPrune(auto &, size_t, size_t, auto &, size_t,
+                                     auto &) {
     return false;
   }
 };
 
 struct NoAddUnit {
-  static std::optional<int16_t> AddUnit(auto &, size_t, auto &) {
+  PLASTIX_HD static std::optional<int16_t> AddUnit(auto &, size_t, auto &) {
     return std::nullopt;
   }
-  static void InitUnit(auto &, size_t, size_t, auto &) {}
+  PLASTIX_HD static void InitUnit(auto &, size_t, size_t, auto &) {}
 };
 
 struct NoAddConn {
-  static bool ShouldAddIncomingConnection(auto &, size_t, size_t, auto &) {
+  PLASTIX_HD static bool ShouldAddIncomingConnection(auto &, size_t, size_t,
+                                                     auto &) {
     return false;
   }
-  static bool ShouldAddOutgoingConnection(auto &, size_t, size_t, auto &) {
+  PLASTIX_HD static bool ShouldAddOutgoingConnection(auto &, size_t, size_t,
+                                                     auto &) {
     return false;
   }
-  static void InitConnection(auto &, size_t, size_t, auto &, size_t, auto &) {}
+  PLASTIX_HD static void InitConnection(auto &, size_t, size_t, auto &, size_t,
+                                        auto &) {}
 };
 
 struct NoResetGlobalState {
-  static void Reset(auto &) {}
+  PLASTIX_HD static void Reset(auto &) {}
 };
 
 // Loss policies stage the upstream gradient dL/dActivation into
@@ -176,15 +181,16 @@ struct NoResetGlobalState {
 // respect to the output activation, and weight updates subtract
 // `learning_rate * grad * input`.
 struct NoLoss {
-  static void CalculateLoss(auto &, UnitRange, std::span<const float>, auto &) {
-  }
+  PLASTIX_HD static void CalculateLoss(auto &, UnitRange,
+                                       std::span<const float>, auto &) {}
 };
 
 // Mean squared error: L = 0.5 * sum((pred - target)^2).
 // dL/dpred_i = pred_i - target_i.
 struct MSELoss {
-  static void CalculateLoss(auto &U, UnitRange Outputs,
-                            std::span<const float> Targets, auto &) {
+  PLASTIX_HD static void CalculateLoss(auto &U, UnitRange Outputs,
+                                       std::span<const float> Targets,
+                                       auto &) {
     size_t I = 0;
     for (size_t Id : Outputs.Ids()) {
       float Pred = GetActivation(U, Id);
@@ -197,8 +203,9 @@ struct MSELoss {
 // dL/dpred_i = (pred_i - target_i) / (N * L). Epsilon keeps the gradient
 // finite when predictions match targets exactly.
 struct RMSLoss {
-  static void CalculateLoss(auto &U, UnitRange Outputs,
-                            std::span<const float> Targets, auto &) {
+  PLASTIX_HD static void CalculateLoss(auto &U, UnitRange Outputs,
+                                       std::span<const float> Targets,
+                                       auto &) {
     float SumSq = 0.0f;
     size_t I = 0;
     for (size_t Id : Outputs.Ids()) {
@@ -220,8 +227,9 @@ struct RMSLoss {
 // (one-hot or soft). L = -sum target_i * log(softmax(pred)_i).
 // dL/dpred_i = softmax(pred)_i - target_i.
 struct SoftmaxCrossEntropyLoss {
-  static void CalculateLoss(auto &U, UnitRange Outputs,
-                            std::span<const float> Targets, auto &) {
+  PLASTIX_HD static void CalculateLoss(auto &U, UnitRange Outputs,
+                                       std::span<const float> Targets,
+                                       auto &) {
     float Max = -std::numeric_limits<float>::infinity();
     for (size_t Id : Outputs.Ids()) {
       float P = GetActivation(U, Id);
@@ -261,6 +269,14 @@ template <typename Global = EmptyGlobalState> struct DefaultNetworkTraits {
   using ExtraConnFields = ConnFieldList<alloc::SOAField<WeightTag, float>>;
   static constexpr uint16_t Neighbourhood = 1;
   static constexpr Propagation Model = Propagation::Topological;
+  // Opt-out flags for policies that are not device-safe (host-only state,
+  // unsafe reductions like `G.Tau += ...` in update). When false, the
+  // corresponding DoX phase always runs the host loop, even on a CUDA
+  // build. Default true: most policies are pure SOA reads/writes and safe
+  // to parallelize.
+  static constexpr bool KernelizeUpdate = true;
+  static constexpr bool KernelizePrune = true;
+  static constexpr bool KernelizeAdd = true;
 };
 
 // ---------------------------------------------------------------------------

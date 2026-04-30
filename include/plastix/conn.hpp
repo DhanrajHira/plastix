@@ -2,6 +2,7 @@
 #define PLASTIX_CONN_HPP
 
 #include "plastix/alloc.hpp"
+#include "plastix/macros.hpp"
 
 namespace plastix {
 
@@ -18,7 +19,7 @@ struct SrcLevelTag {};
 struct WeightTag {};
 
 // Convenience accessor for the common Weight field.
-constexpr auto &GetWeight(auto &Alloc, size_t Id) {
+PLASTIX_HD constexpr auto &GetWeight(auto &Alloc, size_t Id) {
   return GetField<WeightTag>(Alloc, Id);
 }
 
