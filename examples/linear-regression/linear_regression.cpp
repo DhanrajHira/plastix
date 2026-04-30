@@ -11,14 +11,14 @@ constexpr size_t NumInputs = 3;
 struct LinearForwardPass {
   using Accumulator = float;
 
-  static float Map(auto &U, size_t, size_t SrcId, auto &C, size_t ConnId,
-                   auto &) {
+  PLASTIX_HD static float Map(auto &U, size_t, size_t SrcId, auto &C,
+                              size_t ConnId, auto &) {
     return plastix::GetWeight(C, ConnId) * plastix::GetActivation(U, SrcId);
   }
 
-  static float Combine(float A, float B) { return A + B; }
+  PLASTIX_HD static float Combine(float A, float B) { return A + B; }
 
-  static void Apply(auto &U, size_t Id, auto &, float Accumulated) {
+  PLASTIX_HD static void Apply(auto &U, size_t Id, auto &, float Accumulated) {
     plastix::GetActivation(U, Id) = Accumulated;
   }
 };
@@ -28,15 +28,16 @@ struct LinearForwardPass {
 // DoCalculateLoss; the source activation still holds the input value from
 // the forward pass, so we read it directly off the source unit.
 struct GradientDescentConn {
-  static void UpdateIncomingConnection(auto &U, size_t DstId, size_t SrcId,
-                                       auto &C, size_t ConnId, auto &) {
+  PLASTIX_HD static void UpdateIncomingConnection(auto &U, size_t DstId,
+                                                  size_t SrcId, auto &C,
+                                                  size_t ConnId, auto &) {
     float Grad = plastix::GetBackwardAcc(U, DstId);
     float Input = plastix::GetActivation(U, SrcId);
     plastix::GetWeight(C, ConnId) -= LearningRate * Grad * Input;
   }
 
-  static void UpdateOutgoingConnection(auto &, size_t, size_t, auto &, size_t,
-                                       auto &) {}
+  PLASTIX_HD static void UpdateOutgoingConnection(auto &, size_t, size_t,
+                                                  auto &, size_t, auto &) {}
 };
 
 struct LRTraits : plastix::DefaultNetworkTraits<> {

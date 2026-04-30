@@ -73,12 +73,12 @@ struct SwiftTDConnInit {
 // --- forward: v = Σ w_i f_i; expose v through Globals so Loss can read it.
 struct SwiftTDForward {
   using Accumulator = float;
-  static float Map(auto &U, size_t, size_t SrcId, auto &C, size_t ConnId,
-                   auto &) {
+  PLASTIX_HD static float Map(auto &U, size_t, size_t SrcId, auto &C,
+                              size_t ConnId, auto &) {
     return plastix::GetWeight(C, ConnId) * plastix::GetActivation(U, SrcId);
   }
-  static float Combine(float A, float B) { return A + B; }
-  static void Apply(auto &U, size_t Id, auto &G, float Acc) {
+  PLASTIX_HD static float Combine(float A, float B) { return A + B; }
+  PLASTIX_HD static void Apply(auto &U, size_t Id, auto &G, float Acc) {
     plastix::GetActivation(U, Id) = Acc;
     G.V = Acc;
   }
@@ -195,6 +195,9 @@ struct SwiftTDTraits : plastix::DefaultNetworkTraits<SwiftTDGlobals> {
   using Loss = SwiftTDLoss;
   using UpdateConn = SwiftTDUpdate;
   using ResetGlobal = SwiftTDResetGlobal;
+  // SwiftTDUpdate writes `G.Tau += ...` and `G.B += ...` from every thread —
+  // an unsafe reduction under parallel execution. Keep this on the host.
+  static constexpr bool KernelizeUpdate = false;
 
   using ExtraConnFields = plastix::ConnFieldList<
       plastix::alloc::SOAField<plastix::WeightTag, float>,

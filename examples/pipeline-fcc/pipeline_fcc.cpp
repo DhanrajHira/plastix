@@ -9,14 +9,14 @@
 struct IdentityForwardPass {
   using Accumulator = float;
 
-  static float Map(auto &U, size_t, size_t SrcId, auto &C, size_t ConnId,
-                   auto &) {
+  PLASTIX_HD static float Map(auto &U, size_t, size_t SrcId, auto &C,
+                              size_t ConnId, auto &) {
     return plastix::GetWeight(C, ConnId) * plastix::GetActivation(U, SrcId);
   }
 
-  static float Combine(float A, float B) { return A + B; }
+  PLASTIX_HD static float Combine(float A, float B) { return A + B; }
 
-  static void Apply(auto &U, size_t Id, auto &, float Accumulated) {
+  PLASTIX_HD static void Apply(auto &U, size_t Id, auto &, float Accumulated) {
     plastix::GetActivation(U, Id) = Accumulated;
   }
 };

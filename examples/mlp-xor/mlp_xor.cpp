@@ -16,12 +16,12 @@ struct GradPreActTag {};
 struct SigmoidForwardPass {
   using Accumulator = float;
 
-  static float Map(auto &U, size_t, size_t SrcId, auto &C, size_t ConnId,
-                   auto &) {
+  PLASTIX_HD static float Map(auto &U, size_t, size_t SrcId, auto &C,
+                              size_t ConnId, auto &) {
     return plastix::GetWeight(C, ConnId) * plastix::GetActivation(U, SrcId);
   }
-  static float Combine(float A, float B) { return A + B; }
-  static void Apply(auto &U, size_t Id, auto &, float Accumulated) {
+  PLASTIX_HD static float Combine(float A, float B) { return A + B; }
+  PLASTIX_HD static void Apply(auto &U, size_t Id, auto &, float Accumulated) {
     plastix::GetActivation(U, Id) = 1.0f / (1.0f + std::exp(-Accumulated));
   }
 };
@@ -34,13 +34,13 @@ struct SigmoidForwardPass {
 struct SigmoidBackwardPass {
   using Accumulator = float;
 
-  static float Map(auto &U, size_t, size_t ToId, auto &C, size_t ConnId,
-                   auto &) {
+  PLASTIX_HD static float Map(auto &U, size_t, size_t ToId, auto &C,
+                              size_t ConnId, auto &) {
     return plastix::GetWeight(C, ConnId) *
            plastix::GetField<GradPreActTag>(U, ToId);
   }
-  static float Combine(float A, float B) { return A + B; }
-  static void Apply(auto &U, size_t Id, auto &, float Accumulated) {
+  PLASTIX_HD static float Combine(float A, float B) { return A + B; }
+  PLASTIX_HD static void Apply(auto &U, size_t Id, auto &, float Accumulated) {
     float A = plastix::GetActivation(U, Id);
     plastix::GetField<GradPreActTag>(U, Id) = Accumulated * A * (1.0f - A);
   }
@@ -48,14 +48,15 @@ struct SigmoidBackwardPass {
 
 // w_ij -= lr * (dL/dz_dst) * a_src.
 struct GradientDescentConn {
-  static void UpdateIncomingConnection(auto &U, size_t DstId, size_t SrcId,
-                                       auto &C, size_t ConnId, auto &) {
+  PLASTIX_HD static void UpdateIncomingConnection(auto &U, size_t DstId,
+                                                  size_t SrcId, auto &C,
+                                                  size_t ConnId, auto &) {
     float Grad = plastix::GetField<GradPreActTag>(U, DstId);
     float Input = plastix::GetActivation(U, SrcId);
     plastix::GetWeight(C, ConnId) -= LearningRate * Grad * Input;
   }
-  static void UpdateOutgoingConnection(auto &, size_t, size_t, auto &, size_t,
-                                       auto &) {}
+  PLASTIX_HD static void UpdateOutgoingConnection(auto &, size_t, size_t,
+                                                  auto &, size_t, auto &) {}
 };
 
 struct MlpTraits : plastix::DefaultNetworkTraits<> {
@@ -77,8 +78,8 @@ int main() {
   // The constant bias input lets the hidden and output units learn a
   // per-unit bias through their incoming weights without extra plumbing.
   MlpNetwork Net(
-      3, plastix::FullyConnected{4, plastix::RandomUniformWeight{1234}},
-      plastix::FullyConnected{1, plastix::RandomUniformWeight{1234}});
+      3, plastix::FullyConnected{4, plastix::RandomUniformWeight{1u}},
+      plastix::FullyConnected{1, plastix::RandomUniformWeight{2u}});
 
   const float Inputs[4][3] = {
       {0.0f, 0.0f, 1.0f},
