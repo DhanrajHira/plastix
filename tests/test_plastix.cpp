@@ -73,13 +73,13 @@ TEST(NetworkTest, SingleLayerPerceptronManyConnections) {
 
 struct ScaledForwardPass {
   using Accumulator = float;
-  static float Map(auto &U, size_t, size_t SrcId, auto &C, size_t ConnId,
-                   auto &) {
+  PLASTIX_HD static float Map(auto &U, size_t, size_t SrcId, auto &C,
+                              size_t ConnId, auto &) {
     return 2.0f * C.template Get<plastix::WeightTag>(ConnId) *
            U.template Get<plastix::ActivationTag>(SrcId);
   }
-  static float Combine(float A, float B) { return A + B; }
-  static void Apply(auto &U, size_t Id, auto &, float Accumulated) {
+  PLASTIX_HD static float Combine(float A, float B) { return A + B; }
+  PLASTIX_HD static void Apply(auto &U, size_t Id, auto &, float Accumulated) {
     U.template Get<plastix::ActivationTag>(Id) = std::tanh(Accumulated);
   }
 };
@@ -186,13 +186,13 @@ TEST(PassTest, ConsecutiveForwardPasses) {
 
 struct GradientBackwardPass {
   using Accumulator = float;
-  static float Map(auto &U, size_t, size_t ToId, auto &C, size_t ConnId,
-                   auto &) {
+  PLASTIX_HD static float Map(auto &U, size_t, size_t ToId, auto &C,
+                              size_t ConnId, auto &) {
     return C.template Get<plastix::WeightTag>(ConnId) *
            U.template Get<plastix::ActivationTag>(ToId);
   }
-  static float Combine(float A, float B) { return A + B; }
-  static void Apply(auto &, size_t, auto &, float) {}
+  PLASTIX_HD static float Combine(float A, float B) { return A + B; }
+  PLASTIX_HD static void Apply(auto &, size_t, auto &, float) {}
 };
 
 struct GradientBackwardTraits : plastix::DefaultNetworkTraits<> {
@@ -376,7 +376,7 @@ TEST(OutputTest, DoStepGetOutput) {
 // ---------------------------------------------------------------------------
 
 struct CopyActivationToBackwardAcc {
-  static void Update(auto &U, size_t Id, auto &) {
+  PLASTIX_HD static void Update(auto &U, size_t Id, auto &) {
     U.template Get<plastix::BackwardAccTag>(Id) =
         U.template Get<plastix::ActivationTag>(Id);
   }
@@ -406,12 +406,13 @@ TEST(UpdateTest, UpdateUnitState) {
 // ---------------------------------------------------------------------------
 
 struct WeightDecayUpdateConn {
-  static void UpdateIncomingConnection(auto &, size_t, size_t, auto &C,
-                                       size_t ConnId, auto &) {
+  PLASTIX_HD static void UpdateIncomingConnection(auto &, size_t, size_t,
+                                                  auto &C, size_t ConnId,
+                                                  auto &) {
     C.template Get<plastix::WeightTag>(ConnId) *= 0.5f;
   }
-  static void UpdateOutgoingConnection(auto &, size_t, size_t, auto &, size_t,
-                                       auto &) {}
+  PLASTIX_HD static void UpdateOutgoingConnection(auto &, size_t, size_t,
+                                                  auto &, size_t, auto &) {}
 };
 
 struct UpdateConnTraits : plastix::DefaultNetworkTraits<> {
@@ -476,7 +477,7 @@ static size_t CountAlive(auto &ConnAlloc) {
 
 // Policy that prunes a specific unit by index.
 struct PruneUnitById {
-  static bool ShouldPrune(auto &, size_t Id, auto &) {
+  PLASTIX_HD static bool ShouldPrune(auto &, size_t Id, auto &) {
     return Id == 2; // prune unit 2
   }
 };
@@ -521,6 +522,7 @@ TEST(PruneTest, PruneUnitMarksSourceConnectionsDead) {
 }
 
 // Policy that prunes the output unit (last unit).
+// TargetId is a host static — keeps the kernel path off via KernelizePrune.
 struct PruneDestUnit {
   static size_t TargetId;
   static bool ShouldPrune(auto &, size_t Id, auto &) { return Id == TargetId; }
@@ -529,6 +531,7 @@ size_t PruneDestUnit::TargetId = 0;
 
 struct PruneDestTraits : plastix::DefaultNetworkTraits<> {
   using PruneUnit = PruneDestUnit;
+  static constexpr bool KernelizePrune = false;
 };
 
 TEST(PruneTest, PruneDestinationMarksAllDead) {
@@ -546,8 +549,8 @@ TEST(PruneTest, PruneDestinationMarksAllDead) {
 
 // Connection-level pruning policy.
 struct PruneSmallWeight {
-  static bool ShouldPrune(auto &, size_t, size_t, auto &C, size_t ConnId,
-                          auto &) {
+  PLASTIX_HD static bool ShouldPrune(auto &, size_t, size_t, auto &C,
+                                     size_t ConnId, auto &) {
     return C.template Get<plastix::WeightTag>(ConnId) < 0.5f;
   }
 };
@@ -606,12 +609,12 @@ TEST(PruneTest, DoStepWithPrune) {
 
 // Policy that adds a new unit 1 level above the current unit, for unit 0 only.
 struct AddOneUnit {
-  static std::optional<int16_t> AddUnit(auto &, size_t Id, auto &) {
+  PLASTIX_HD static std::optional<int16_t> AddUnit(auto &, size_t Id, auto &) {
     if (Id == 0)
       return int16_t{1};
     return std::nullopt;
   }
-  static void InitUnit(auto &, size_t, size_t, auto &) {}
+  PLASTIX_HD static void InitUnit(auto &, size_t, size_t, auto &) {}
 };
 
 struct AddUnitTraits : plastix::DefaultNetworkTraits<> {
@@ -672,12 +675,12 @@ TEST(AddUnitTest, NewUnitDefaultActivation) {
 
 // Policy that returns a large negative offset to test clamping to level 1.
 struct AddUnitNegativeOffset {
-  static std::optional<int16_t> AddUnit(auto &, size_t Id, auto &) {
+  PLASTIX_HD static std::optional<int16_t> AddUnit(auto &, size_t Id, auto &) {
     if (Id == 0)
       return int16_t{-100};
     return std::nullopt;
   }
-  static void InitUnit(auto &, size_t, size_t, auto &) {}
+  PLASTIX_HD static void InitUnit(auto &, size_t, size_t, auto &) {}
 };
 
 struct AddUnitNegativeTraits : plastix::DefaultNetworkTraits<> {
@@ -694,12 +697,12 @@ TEST(AddUnitTest, NegativeOffsetClampedToLevelOne) {
 
 // Policy that returns a huge positive offset to test clamping to MaxLevels-1.
 struct AddUnitHugeOffset {
-  static std::optional<int16_t> AddUnit(auto &, size_t Id, auto &) {
+  PLASTIX_HD static std::optional<int16_t> AddUnit(auto &, size_t Id, auto &) {
     if (Id == 0)
       return int16_t{10000};
     return std::nullopt;
   }
-  static void InitUnit(auto &, size_t, size_t, auto &) {}
+  PLASTIX_HD static void InitUnit(auto &, size_t, size_t, auto &) {}
 };
 
 struct AddUnitHugeTraits : plastix::DefaultNetworkTraits<> {
@@ -718,12 +721,13 @@ TEST(AddUnitTest, LargeOffsetClampedToMaxLevel) {
 // Policy that initializes new units by copying the parent's activation and
 // marking them with a sentinel value. Tests the InitUnit hook.
 struct AddUnitCopyParent {
-  static std::optional<int16_t> AddUnit(auto &, size_t Id, auto &) {
+  PLASTIX_HD static std::optional<int16_t> AddUnit(auto &, size_t Id, auto &) {
     if (Id == 0)
       return int16_t{1};
     return std::nullopt;
   }
-  static void InitUnit(auto &U, size_t NewId, size_t ParentId, auto &) {
+  PLASTIX_HD static void InitUnit(auto &U, size_t NewId, size_t ParentId,
+                                  auto &) {
     U.template Get<plastix::ActivationTag>(NewId) =
         U.template Get<plastix::ActivationTag>(ParentId) + 1.0f;
   }
@@ -772,14 +776,14 @@ TEST(AddUnitTest, InitUnitNotCalledWhenOffsetIsNullopt) {
 
 // Policy that adds one incoming connection: unit 0 accepts from unit 1.
 struct AddOneIncoming {
-  static bool ShouldAddIncomingConnection(auto &, size_t Self, size_t Candidate,
+  PLASTIX_HD static bool ShouldAddIncomingConnection(auto &, size_t Self, size_t Candidate,
                                           auto &) {
     return Self == 0 && Candidate == 1;
   }
-  static bool ShouldAddOutgoingConnection(auto &, size_t, size_t, auto &) {
+  PLASTIX_HD static bool ShouldAddOutgoingConnection(auto &, size_t, size_t, auto &) {
     return false;
   }
-  static void InitConnection(auto &, size_t, size_t, auto &C, size_t ConnId,
+  PLASTIX_HD static void InitConnection(auto &, size_t, size_t, auto &C, size_t ConnId,
                              auto &) {
     C.template Get<plastix::WeightTag>(ConnId) = 0.5f;
   }
@@ -791,14 +795,14 @@ struct AddIncomingTraits : plastix::DefaultNetworkTraits<> {
 
 // Policy that adds one outgoing connection: unit 1 sends to unit 0.
 struct AddOneOutgoing {
-  static bool ShouldAddIncomingConnection(auto &, size_t, size_t, auto &) {
+  PLASTIX_HD static bool ShouldAddIncomingConnection(auto &, size_t, size_t, auto &) {
     return false;
   }
-  static bool ShouldAddOutgoingConnection(auto &, size_t Self, size_t Candidate,
+  PLASTIX_HD static bool ShouldAddOutgoingConnection(auto &, size_t Self, size_t Candidate,
                                           auto &) {
     return Self == 1 && Candidate == 0;
   }
-  static void InitConnection(auto &, size_t, size_t, auto &C, size_t ConnId,
+  PLASTIX_HD static void InitConnection(auto &, size_t, size_t, auto &C, size_t ConnId,
                              auto &) {
     C.template Get<plastix::WeightTag>(ConnId) = 0.75f;
   }
@@ -810,15 +814,15 @@ struct AddOutgoingTraits : plastix::DefaultNetworkTraits<> {
 
 // Policy that adds via both methods: incoming 1→0, outgoing 2→0.
 struct AddBothDirections {
-  static bool ShouldAddIncomingConnection(auto &, size_t Self, size_t Candidate,
+  PLASTIX_HD static bool ShouldAddIncomingConnection(auto &, size_t Self, size_t Candidate,
                                           auto &) {
     return Self == 0 && Candidate == 1;
   }
-  static bool ShouldAddOutgoingConnection(auto &, size_t Self, size_t Candidate,
+  PLASTIX_HD static bool ShouldAddOutgoingConnection(auto &, size_t Self, size_t Candidate,
                                           auto &) {
     return Self == 2 && Candidate == 0;
   }
-  static void InitConnection(auto &, size_t SrcId, size_t, auto &C,
+  PLASTIX_HD static void InitConnection(auto &, size_t SrcId, size_t, auto &C,
                              size_t ConnId, auto &) {
     // Incoming 1→0 gets 0.3, outgoing 2→0 gets 0.7. Distinguish by SrcId.
     C.template Get<plastix::WeightTag>(ConnId) = (SrcId == 1) ? 0.3f : 0.7f;
@@ -902,14 +906,14 @@ TEST(AddConnTest, CalledTwiceAddsAgain) {
 
 // Policy that adds a connection 0→2 with weight 0.5 (targets the output unit).
 struct AddConnToOutput {
-  static bool ShouldAddIncomingConnection(auto &, size_t Self, size_t Candidate,
+  PLASTIX_HD static bool ShouldAddIncomingConnection(auto &, size_t Self, size_t Candidate,
                                           auto &) {
     return Self == 2 && Candidate == 0;
   }
-  static bool ShouldAddOutgoingConnection(auto &, size_t, size_t, auto &) {
+  PLASTIX_HD static bool ShouldAddOutgoingConnection(auto &, size_t, size_t, auto &) {
     return false;
   }
-  static void InitConnection(auto &, size_t, size_t, auto &C, size_t ConnId,
+  PLASTIX_HD static void InitConnection(auto &, size_t, size_t, auto &C, size_t ConnId,
                              auto &) {
     C.template Get<plastix::WeightTag>(ConnId) = 0.5f;
   }
@@ -1005,14 +1009,14 @@ TEST(LevelTest, AddConnectionTriggersResort) {
 
 // Policy that tries to add incoming connections between all pairs.
 struct AddAllIncoming {
-  static bool ShouldAddIncomingConnection(auto &, size_t Self, size_t Candidate,
+  PLASTIX_HD static bool ShouldAddIncomingConnection(auto &, size_t Self, size_t Candidate,
                                           auto &) {
     return Self > Candidate;
   }
-  static bool ShouldAddOutgoingConnection(auto &, size_t, size_t, auto &) {
+  PLASTIX_HD static bool ShouldAddOutgoingConnection(auto &, size_t, size_t, auto &) {
     return false;
   }
-  static void InitConnection(auto &, size_t, size_t, auto &C, size_t ConnId,
+  PLASTIX_HD static void InitConnection(auto &, size_t, size_t, auto &C, size_t ConnId,
                              auto &) {
     C.template Get<plastix::WeightTag>(ConnId) = 1.0f;
   }
@@ -1091,15 +1095,15 @@ TEST(NeighbourhoodTest, NeighbourhoodFiltersDistantLevels) {
 // Outgoing: unit 1 sends to unit 0 => (From=1, To=0).
 // Same edge proposed twice — should be deduplicated to one connection.
 struct AddDuplicateEdge {
-  static bool ShouldAddIncomingConnection(auto &, size_t Self, size_t Candidate,
+  PLASTIX_HD static bool ShouldAddIncomingConnection(auto &, size_t Self, size_t Candidate,
                                           auto &) {
     return Self == 0 && Candidate == 1;
   }
-  static bool ShouldAddOutgoingConnection(auto &, size_t Self, size_t Candidate,
+  PLASTIX_HD static bool ShouldAddOutgoingConnection(auto &, size_t Self, size_t Candidate,
                                           auto &) {
     return Self == 1 && Candidate == 0;
   }
-  static void InitConnection(auto &, size_t, size_t, auto &C, size_t ConnId,
+  PLASTIX_HD static void InitConnection(auto &, size_t, size_t, auto &C, size_t ConnId,
                              auto &) {
     C.template Get<plastix::WeightTag>(ConnId) = 0.25f;
   }
