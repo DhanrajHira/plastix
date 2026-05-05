@@ -21,6 +21,16 @@ target_include_directories(plastix PUBLIC
 
 target_compile_options(plastix PRIVATE -Wall -Wextra -Wpedantic)
 
+# CCCL (Thrust + CUB + libcudacxx) is a hard dependency: random.hpp uses
+# thrust::random for host/device-portable RNG, and cuda_primitives.hpp
+# wraps cub::DeviceScan / cub::DeviceRadixSort. CCCL ships with the CUDA
+# toolkit but its CMake config lives outside the default search path, so
+# we use CUDAToolkit's discovery to point find_package at the right dir.
+find_package(CUDAToolkit REQUIRED)
+list(APPEND CMAKE_PREFIX_PATH "${CUDAToolkit_LIBRARY_ROOT}")
+find_package(CCCL CONFIG REQUIRED)
+target_link_libraries(plastix PUBLIC CCCL::CCCL)
+
 # When PLASTIX_ENABLE_CUDA is on, every .cpp in the project is compiled as
 # CUDA so nvcc sees PLASTIX_HD-marked code in both host and device flavors.
 # The library itself, the tests, and the examples flip language uniformly.
