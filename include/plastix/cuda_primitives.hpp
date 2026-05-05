@@ -2,15 +2,17 @@
 #define PLASTIX_CUDA_PRIMITIVES_HPP
 
 // Thin wrappers around CCCL parallel primitives plus a couple of launch
-// helpers. The framework used to ship hand-rolled scan and radix-sort
-// implementations here; both are now thin adapters over `cub::DeviceScan`
-// and `cub::DeviceRadixSort` so the heavy lifting lives in CCCL.
+// helpers, alongside an in-house thread-level radix sort that we keep
+// hand-rolled on purpose. The exclusive scan delegates to
+// `cub::DeviceScan::ExclusiveSum`; the radix sort stays bespoke because
+// CUB's device-level sort is built around block-level cooperation, while
+// the framework's proposal pipeline wants a cheaper one-thread-per-key
+// pass that interleaves cleanly with the scan-based scatter below.
 
 #ifdef PLASTIX_HAS_CUDA
 
 #include "plastix/macros.hpp"
 
-#include <cub/device/device_radix_sort.cuh>
 #include <cub/device/device_scan.cuh>
 
 #include <cstddef>
@@ -79,33 +81,93 @@ PLASTIX_HOST void AddOnesIntoSlot(float *Slot, size_t N) {
 }
 
 // ---------------------------------------------------------------------------
-// In-place 64-bit ascending sort (CUB radix)
+// 64-bit LSB stable radix sort (1-bit per pass, scan-based scatter)
 // ---------------------------------------------------------------------------
 //
-// `cub::DeviceRadixSort::SortKeys` is out-of-place and needs a separate
-// output buffer plus a temp-storage allocation. We allocate both, run the
-// sort, then memcpy the sorted keys back into `Data`. Managed memory keeps
-// the scratch buffer addressable from host code (matches the rest of the
-// framework's allocation discipline).
+// 64 passes, one per bit. Each pass partitions keys into a "0-bit" half
+// followed by a "1-bit" half, preserving relative order — a stable parallel
+// partition built on top of a single exclusive scan.
+//
+// Why 1-bit and not 8-bit byte radix: a byte-radix scatter via atomicAdd is
+// fast but unstable across keys with the same digit, which corrupts the
+// ordering established by lower-bit passes. The scan-based 1-bit partition
+// is naturally stable and only marginally more expensive at our N (proposal
+// counts are bounded by ConnAlloc capacity, ~10^4 keys).
+//
+// Why not cub::DeviceRadixSort: that primitive is block-cooperative and
+// pulls in a sizable temp-storage / dispatch dance. The pass below is a
+// straight thread-level partition (one thread per key per bit) that
+// composes naturally with `ExclusiveScanInPlace` above and matches the
+// granularity the proposal pipeline expects.
+//
+// Templated to dodge nvlink ODR violations from non-template __global__
+// definitions in a header.
 
+namespace detail {
+
+// Writes Flags[I] = 1 if bit `Bit` of Keys[I] is 0, else 0. Index I == N is
+// reserved as the scan sentinel and gets a 0 so the exclusive-scanned value
+// at Flags[N] holds the total zero-count.
+template <typename T = void>
+__global__ void RadixBitFlagKernel(size_t N, const uint64_t *Keys,
+                                   uint32_t *Flags, int Bit) {
+  size_t I = blockIdx.x * blockDim.x + threadIdx.x;
+  if (I > N)
+    return;
+  uint32_t V = 0u;
+  if (I < N)
+    V = ((Keys[I] >> Bit) & 1ull) ? 0u : 1u;
+  Flags[I] = V;
+}
+
+// Stable scatter: zero-bit keys land at Scan[I]; one-bit keys land in the
+// second half at ZeroCount + (I - Scan[I]).
+template <typename T = void>
+__global__ void RadixBitScatterKernel(size_t N, const uint64_t *In,
+                                      uint64_t *Out, const uint32_t *Scan,
+                                      uint32_t ZeroCount, int Bit) {
+  size_t I = blockIdx.x * blockDim.x + threadIdx.x;
+  if (I >= N)
+    return;
+  uint64_t K = In[I];
+  uint32_t IsZero = ((K >> Bit) & 1ull) ? 0u : 1u;
+  uint32_t Zeros = Scan[I];
+  uint32_t Pos = IsZero ? Zeros : (ZeroCount + static_cast<uint32_t>(I) - Zeros);
+  Out[Pos] = K;
+}
+
+} // namespace detail
+
+// Sorts `Data[0..N)` ascending in place. Allocates ~N*8 + N*4 bytes of
+// managed memory for the duration of the call. 64 passes (even), so the
+// final sorted result is guaranteed to be back in `Data`.
 PLASTIX_HOST void RadixSort64InPlace(uint64_t *Data, size_t N) {
   if (N <= 1)
     return;
   uint64_t *Scratch = nullptr;
+  uint32_t *Flags = nullptr;
   cudaMallocManaged(&Scratch, N * sizeof(uint64_t));
+  cudaMallocManaged(&Flags, (N + 1) * sizeof(uint32_t));
 
-  size_t TempBytes = 0;
-  cub::DeviceRadixSort::SortKeys(nullptr, TempBytes, Data, Scratch,
-                                 static_cast<int>(N));
-  void *Temp = nullptr;
-  cudaMalloc(&Temp, TempBytes);
-  cub::DeviceRadixSort::SortKeys(Temp, TempBytes, Data, Scratch,
-                                 static_cast<int>(N));
+  uint64_t *In = Data;
+  uint64_t *Out = Scratch;
+  unsigned Grid = static_cast<unsigned>(GridSize(N));
+  unsigned GridP1 = static_cast<unsigned>(GridSize(N + 1));
+  for (int Bit = 0; Bit < 64; ++Bit) {
+    detail::RadixBitFlagKernel<>
+        <<<GridP1, DefaultBlockSize>>>(N, In, Flags, Bit);
+    ExclusiveScanInPlace(Flags, N + 1);
+    cudaDeviceSynchronize();
+    uint32_t ZeroCount = Flags[N];
+    detail::RadixBitScatterKernel<>
+        <<<Grid, DefaultBlockSize>>>(N, In, Out, Flags, ZeroCount, Bit);
+    uint64_t *Tmp = In;
+    In = Out;
+    Out = Tmp;
+  }
   cudaDeviceSynchronize();
-  cudaMemcpy(Data, Scratch, N * sizeof(uint64_t), cudaMemcpyDefault);
-
-  cudaFree(Temp);
   cudaFree(Scratch);
+  cudaFree(Flags);
 }
 
 } // namespace cuda
