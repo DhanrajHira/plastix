@@ -2,20 +2,18 @@
 #define PLASTIX_PLASTIX_HPP
 
 #include "plastix/conn.hpp"
+#include "plastix/dispatch_cpu.hpp"
+#include "plastix/dispatch_gpu.hpp"
 #include "plastix/layers.hpp"
 #include "plastix/traits.hpp"
 #include "plastix/unit_state.hpp"
-#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <cstring>
 #include <span>
 #include <type_traits>
 
 #ifdef PLASTIX_HAS_CUDA
-#include "plastix/cuda_kernels.hpp"
-#include "plastix/cuda_primitives.hpp"
 #include <cuda_runtime.h>
 #endif
 
@@ -29,6 +27,17 @@ const char *version();
 // ---------------------------------------------------------------------------
 
 static constexpr uint16_t MaxLevels = 1024;
+
+// Compile-time backend witness. Every Do* phase picks between
+// `plastix::cpu::Foo(...)` and `plastix::gpu::Foo(...)` with
+// `if constexpr (HasCuda && <per-phase predicate>)`. The gpu side is
+// always declared (empty stubs in host builds) so the qualified-name
+// lookup in the discarded branch resolves.
+#ifdef PLASTIX_HAS_CUDA
+inline constexpr bool HasCuda = true;
+#else
+inline constexpr bool HasCuda = false;
+#endif
 
 struct LevelRange {
   uint32_t Begin;
@@ -142,100 +151,20 @@ public:
 
     // GPU kernels currently require Accumulator=float (atomicAdd<float> is
     // the only supported Combine). Non-float accumulators run the host loop.
-#ifdef PLASTIX_HAS_CUDA
-    constexpr bool CanKernel = std::is_same_v<Acc, float>;
-#else
-    constexpr bool CanKernel = false;
-#endif
-
     if constexpr (Traits::Model == Propagation::Topological) {
       if (NeedsResort)
         SortConnectionsByLevel();
-
-      if constexpr (CanKernel) {
-#ifdef PLASTIX_HAS_CUDA
-        size_t NumUnits = UnitAlloc.Size();
-        for (uint16_t L = 1; L <= NumLevels; ++L) {
-          uint32_t Begin = Ranges[L - 1].Begin;
-          uint32_t End = Ranges[L - 1].End;
-          if (End > Begin) {
-            unsigned Block = cuda::DefaultBlockSize;
-            unsigned Grid = static_cast<unsigned>(
-                cuda::GridSize(End - Begin, Block));
-            cuda::ForwardConnSweepLevelKernel<FP>
-                <<<Grid, Block>>>(Begin, End, UnitAlloc, ConnAlloc, Globals);
-          }
-          if (NumUnits > NumInput) {
-            unsigned Block = cuda::DefaultBlockSize;
-            unsigned Grid = static_cast<unsigned>(
-                cuda::GridSize(NumUnits - NumInput, Block));
-            cuda::ForwardUnitApplyLevelKernel<FP>
-                <<<Grid, Block>>>(NumInput, NumUnits, L, UnitAlloc, Globals);
-          }
-        }
-        cudaDeviceSynchronize();
-#endif
-      } else {
-        for (uint16_t L = 1; L <= NumLevels; ++L) {
-          for (uint32_t C = Ranges[L - 1].Begin; C < Ranges[L - 1].End; ++C) {
-            if (GetField<DeadTag>(ConnAlloc, C))
-              continue;
-            auto ToId = GetField<ToIdTag>(ConnAlloc, C);
-            auto FromId = GetField<FromIdTag>(ConnAlloc, C);
-            auto &UAcc = GetForwardAcc(UnitAlloc, ToId);
-            UAcc = FP::Combine(
-                UAcc, FP::Map(UnitAlloc, ToId, FromId, ConnAlloc, C, *Globals));
-          }
-
-          size_t NumUnits = UnitAlloc.Size();
-          for (size_t I = NumInput; I < NumUnits; ++I) {
-            if (GetLevel(UnitAlloc, I) == L) {
-              auto &UAcc = GetForwardAcc(UnitAlloc, I);
-              FP::Apply(UnitAlloc, I, *Globals, UAcc);
-              UAcc = Acc{};
-            }
-          }
-        }
-      }
+      if constexpr (HasCuda && std::is_same_v<Acc, float>)
+        gpu::DoForwardTopological<FP>(UnitAlloc, ConnAlloc, Globals, NumInput,
+                                      Ranges, NumLevels);
+      else
+        cpu::DoForwardTopological<FP>(UnitAlloc, ConnAlloc, Globals, NumInput,
+                                      Ranges, NumLevels);
     } else {
-      if constexpr (CanKernel) {
-#ifdef PLASTIX_HAS_CUDA
-        size_t NumConns = ConnAlloc.Size();
-        if (NumConns > 0) {
-          unsigned Block = cuda::DefaultBlockSize;
-          unsigned Grid =
-              static_cast<unsigned>(cuda::GridSize(NumConns, Block));
-          cuda::ForwardConnSweepKernel<FP>
-              <<<Grid, Block>>>(NumConns, UnitAlloc, ConnAlloc, Globals);
-        }
-        size_t NumUnits = UnitAlloc.Size();
-        if (NumUnits > NumInput) {
-          unsigned Block = cuda::DefaultBlockSize;
-          unsigned Grid = static_cast<unsigned>(
-              cuda::GridSize(NumUnits - NumInput, Block));
-          cuda::ForwardUnitApplyKernel<FP>
-              <<<Grid, Block>>>(NumInput, NumUnits, UnitAlloc, Globals);
-        }
-        cudaDeviceSynchronize();
-#endif
-      } else {
-        for (size_t C = 0; C < ConnAlloc.Size(); ++C) {
-          if (GetField<DeadTag>(ConnAlloc, C))
-            continue;
-          auto ToId = GetField<ToIdTag>(ConnAlloc, C);
-          auto FromId = GetField<FromIdTag>(ConnAlloc, C);
-          auto &UAcc = GetForwardAcc(UnitAlloc, ToId);
-          UAcc = FP::Combine(
-              UAcc, FP::Map(UnitAlloc, ToId, FromId, ConnAlloc, C, *Globals));
-        }
-
-        size_t NumUnits = UnitAlloc.Size();
-        for (size_t I = NumInput; I < NumUnits; ++I) {
-          auto &UAcc = GetForwardAcc(UnitAlloc, I);
-          FP::Apply(UnitAlloc, I, *Globals, UAcc);
-          UAcc = Acc{};
-        }
-      }
+      if constexpr (HasCuda && std::is_same_v<Acc, float>)
+        gpu::DoForwardPipeline<FP>(UnitAlloc, ConnAlloc, Globals, NumInput);
+      else
+        cpu::DoForwardPipeline<FP>(UnitAlloc, ConnAlloc, Globals, NumInput);
     }
 
     ++Step;
@@ -258,97 +187,18 @@ public:
       using BP = typename Traits::BackwardPass;
       using Acc = typename BP::Accumulator;
 
-#ifdef PLASTIX_HAS_CUDA
-      constexpr bool CanKernel = std::is_same_v<Acc, float>;
-#else
-      constexpr bool CanKernel = false;
-#endif
-
       if constexpr (Traits::Model == Propagation::Topological) {
-        if constexpr (CanKernel) {
-#ifdef PLASTIX_HAS_CUDA
-          size_t NumUnits = UnitAlloc.Size();
-          for (uint16_t L = NumLevels; L >= 1; --L) {
-            uint32_t Begin = Ranges[L].Begin;
-            uint32_t End = Ranges[L].End;
-            if (End > Begin) {
-              unsigned Block = cuda::DefaultBlockSize;
-              unsigned Grid = static_cast<unsigned>(
-                  cuda::GridSize(End - Begin, Block));
-              cuda::BackwardConnSweepLevelKernel<BP>
-                  <<<Grid, Block>>>(Begin, End, UnitAlloc, ConnAlloc, Globals);
-            }
-            if (NumUnits > NumInput) {
-              unsigned Block = cuda::DefaultBlockSize;
-              unsigned Grid = static_cast<unsigned>(
-                  cuda::GridSize(NumUnits - NumInput, Block));
-              cuda::BackwardUnitApplyLevelKernel<BP>
-                  <<<Grid, Block>>>(NumInput, NumUnits, L, UnitAlloc, Globals);
-            }
-          }
-          cudaDeviceSynchronize();
-#endif
-        } else {
-          for (uint16_t L = NumLevels; L >= 1; --L) {
-            for (uint32_t C = Ranges[L].Begin; C < Ranges[L].End; ++C) {
-              if (GetField<DeadTag>(ConnAlloc, C))
-                continue;
-              auto ToId = GetField<ToIdTag>(ConnAlloc, C);
-              auto FromId = GetField<FromIdTag>(ConnAlloc, C);
-              auto &UAcc = GetBackwardAcc(UnitAlloc, FromId);
-              UAcc = BP::Combine(
-                  UAcc, BP::Map(UnitAlloc, FromId, ToId, ConnAlloc, C, *Globals));
-            }
-
-            size_t NumUnits = UnitAlloc.Size();
-            for (size_t I = NumInput; I < NumUnits; ++I) {
-              if (GetLevel(UnitAlloc, I) == L) {
-                auto &UAcc = GetBackwardAcc(UnitAlloc, I);
-                BP::Apply(UnitAlloc, I, *Globals, UAcc);
-                UAcc = Acc{};
-              }
-            }
-          }
-        }
+        if constexpr (HasCuda && std::is_same_v<Acc, float>)
+          gpu::DoBackwardTopological<BP>(UnitAlloc, ConnAlloc, Globals,
+                                         NumInput, Ranges, NumLevels);
+        else
+          cpu::DoBackwardTopological<BP>(UnitAlloc, ConnAlloc, Globals,
+                                         NumInput, Ranges, NumLevels);
       } else {
-        if constexpr (CanKernel) {
-#ifdef PLASTIX_HAS_CUDA
-          size_t NumConns = ConnAlloc.Size();
-          if (NumConns > 0) {
-            unsigned Block = cuda::DefaultBlockSize;
-            unsigned Grid =
-                static_cast<unsigned>(cuda::GridSize(NumConns, Block));
-            cuda::BackwardConnSweepKernel<BP>
-                <<<Grid, Block>>>(NumConns, UnitAlloc, ConnAlloc, Globals);
-          }
-          size_t NumUnits = UnitAlloc.Size();
-          if (NumUnits > 0) {
-            unsigned Block = cuda::DefaultBlockSize;
-            unsigned Grid =
-                static_cast<unsigned>(cuda::GridSize(NumUnits, Block));
-            cuda::BackwardUnitApplyKernel<BP>
-                <<<Grid, Block>>>(size_t{0}, NumUnits, UnitAlloc, Globals);
-          }
-          cudaDeviceSynchronize();
-#endif
-        } else {
-          for (size_t C = ConnAlloc.Size(); C-- > 0;) {
-            if (GetField<DeadTag>(ConnAlloc, C))
-              continue;
-            auto ToId = GetField<ToIdTag>(ConnAlloc, C);
-            auto FromId = GetField<FromIdTag>(ConnAlloc, C);
-            auto &UAcc = GetBackwardAcc(UnitAlloc, FromId);
-            UAcc = BP::Combine(
-                UAcc, BP::Map(UnitAlloc, FromId, ToId, ConnAlloc, C, *Globals));
-          }
-
-          size_t NumUnits = UnitAlloc.Size();
-          for (size_t I = 0; I < NumUnits; ++I) {
-            auto &UAcc = GetBackwardAcc(UnitAlloc, I);
-            BP::Apply(UnitAlloc, I, *Globals, UAcc);
-            UAcc = Acc{};
-          }
-        }
+        if constexpr (HasCuda && std::is_same_v<Acc, float>)
+          gpu::DoBackwardPipeline<BP>(UnitAlloc, ConnAlloc, Globals, NumInput);
+        else
+          cpu::DoBackwardPipeline<BP>(UnitAlloc, ConnAlloc, Globals, NumInput);
       }
     }
   }
@@ -366,27 +216,10 @@ public:
       return;
     else {
       using UP = typename Traits::UpdateUnit;
-      size_t NumUnits = UnitAlloc.Size();
-
-#ifdef PLASTIX_HAS_CUDA
-      constexpr bool CanKernel = Traits::KernelizeUpdate;
-#else
-      constexpr bool CanKernel = false;
-#endif
-
-      if constexpr (CanKernel) {
-#ifdef PLASTIX_HAS_CUDA
-        if (NumUnits > 0) {
-          unsigned Block = cuda::DefaultBlockSize;
-          unsigned Grid = static_cast<unsigned>(cuda::GridSize(NumUnits, Block));
-          cuda::UpdateUnitKernel<UP><<<Grid, Block>>>(NumUnits, UnitAlloc, Globals);
-          cudaDeviceSynchronize();
-        }
-#endif
-      } else {
-        for (size_t I = 0; I < NumUnits; ++I)
-          UP::Update(UnitAlloc, I, *Globals);
-      }
+      if constexpr (HasCuda && Traits::KernelizeUpdate)
+        gpu::DoUpdateUnit<UP>(UnitAlloc, Globals);
+      else
+        cpu::DoUpdateUnit<UP>(UnitAlloc, Globals);
     }
   }
 
@@ -394,76 +227,23 @@ public:
     if constexpr (std::is_same_v<typename Traits::UpdateConn, NoUpdateConn>)
       return;
     else {
-      using UP = typename Traits::UpdateConn;
-      size_t NumConns = ConnAlloc.Size();
-
-#ifdef PLASTIX_HAS_CUDA
-      constexpr bool CanKernel = Traits::KernelizeUpdate;
-#else
-      constexpr bool CanKernel = false;
-#endif
-
-      if constexpr (CanKernel) {
-#ifdef PLASTIX_HAS_CUDA
-        if (NumConns > 0) {
-          unsigned Block = cuda::DefaultBlockSize;
-          unsigned Grid = static_cast<unsigned>(cuda::GridSize(NumConns, Block));
-          cuda::UpdateConnIncomingKernel<UP>
-              <<<Grid, Block>>>(NumConns, UnitAlloc, ConnAlloc, Globals);
-          cudaDeviceSynchronize();
-          cuda::UpdateConnOutgoingKernel<UP>
-              <<<Grid, Block>>>(NumConns, UnitAlloc, ConnAlloc, Globals);
-          cudaDeviceSynchronize();
-        }
-#endif
-      } else {
-        for (size_t C = 0; C < NumConns; ++C) {
-          if (GetField<DeadTag>(ConnAlloc, C))
-            continue;
-          auto ToId = GetField<ToIdTag>(ConnAlloc, C);
-          auto FromId = GetField<FromIdTag>(ConnAlloc, C);
-          UP::UpdateIncomingConnection(UnitAlloc, ToId, FromId, ConnAlloc, C,
-                                       *Globals);
-        }
-
-        for (size_t C = 0; C < NumConns; ++C) {
-          if (GetField<DeadTag>(ConnAlloc, C))
-            continue;
-          auto ToId = GetField<ToIdTag>(ConnAlloc, C);
-          auto FromId = GetField<FromIdTag>(ConnAlloc, C);
-          UP::UpdateOutgoingConnection(UnitAlloc, FromId, ToId, ConnAlloc, C,
-                                       *Globals);
-        }
-      }
+      using UC = typename Traits::UpdateConn;
+      if constexpr (HasCuda && Traits::KernelizeUpdate)
+        gpu::DoUpdateConn<UC>(UnitAlloc, ConnAlloc, Globals);
+      else
+        cpu::DoUpdateConn<UC>(UnitAlloc, ConnAlloc, Globals);
     }
   }
+
   void DoPruneUnits() {
     if constexpr (std::is_same_v<typename Traits::PruneUnit, NoPruneUnit>)
       return;
     else {
       using PP = typename Traits::PruneUnit;
-      size_t NumUnits = UnitAlloc.Size();
-
-#ifdef PLASTIX_HAS_CUDA
-      constexpr bool CanKernel = Traits::KernelizePrune;
-#else
-      constexpr bool CanKernel = false;
-#endif
-
-      if constexpr (CanKernel) {
-#ifdef PLASTIX_HAS_CUDA
-        if (NumUnits > 0) {
-          unsigned Block = cuda::DefaultBlockSize;
-          unsigned Grid = static_cast<unsigned>(cuda::GridSize(NumUnits, Block));
-          cuda::PruneUnitsKernel<PP><<<Grid, Block>>>(NumUnits, UnitAlloc, Globals);
-          cudaDeviceSynchronize();
-        }
-#endif
-      } else {
-        for (size_t I = 0; I < NumUnits; ++I)
-          GetField<PrunedTag>(UnitAlloc, I) =
-              PP::ShouldPrune(UnitAlloc, I, *Globals);
-      }
+      if constexpr (HasCuda && Traits::KernelizePrune)
+        gpu::DoPruneUnits<PP>(UnitAlloc, Globals);
+      else
+        cpu::DoPruneUnits<PP>(UnitAlloc, Globals);
     }
   }
 
@@ -477,84 +257,25 @@ public:
           !std::is_same_v<typename Traits::PruneUnit, NoPruneUnit>;
       constexpr bool HasConnPrune =
           !std::is_same_v<typename Traits::PruneConn, NoPruneConn>;
-      size_t NumConns = ConnAlloc.Size();
 
-#ifdef PLASTIX_HAS_CUDA
-      constexpr bool CanKernel = Traits::KernelizePrune;
-#else
-      constexpr bool CanKernel = false;
-#endif
-
-      if constexpr (CanKernel) {
-#ifdef PLASTIX_HAS_CUDA
-        if (NumConns > 0) {
-          unsigned Block = cuda::DefaultBlockSize;
-          unsigned Grid = static_cast<unsigned>(cuda::GridSize(NumConns, Block));
-          cuda::PruneConnectionsKernel<HasUnitPrune, HasConnPrune, CP>
-              <<<Grid, Block>>>(NumConns, UnitAlloc, ConnAlloc, Globals);
-          cudaDeviceSynchronize();
-        }
-#endif
-      } else {
-        for (size_t C = 0; C < NumConns; ++C) {
-          if (GetField<DeadTag>(ConnAlloc, C))
-            continue;
-          auto ToId = GetField<ToIdTag>(ConnAlloc, C);
-          auto FromId = GetField<FromIdTag>(ConnAlloc, C);
-
-          bool Remove = false;
-          if constexpr (HasUnitPrune)
-            Remove = GetField<PrunedTag>(UnitAlloc, ToId) ||
-                     GetField<PrunedTag>(UnitAlloc, FromId);
-          if constexpr (HasConnPrune)
-            if (!Remove)
-              Remove = CP::ShouldPrune(UnitAlloc, ToId, FromId, ConnAlloc, C,
-                                       *Globals);
-
-          if (Remove)
-            GetField<DeadTag>(ConnAlloc, C) = true;
-        }
-      }
+      if constexpr (HasCuda && Traits::KernelizePrune)
+        gpu::DoPruneConnections<HasUnitPrune, HasConnPrune, CP>(
+            UnitAlloc, ConnAlloc, Globals);
+      else
+        cpu::DoPruneConnections<HasUnitPrune, HasConnPrune, CP>(
+            UnitAlloc, ConnAlloc, Globals);
     }
   }
+
   void DoAddUnits() {
     if constexpr (std::is_same_v<typename Traits::AddUnit, NoAddUnit>)
       return;
     else {
       using AP = typename Traits::AddUnit;
-      size_t NumUnits = UnitAlloc.Size();
-
-#ifdef PLASTIX_HAS_CUDA
-      constexpr bool CanKernel = Traits::KernelizeAdd;
-#else
-      constexpr bool CanKernel = false;
-#endif
-
-      if constexpr (CanKernel) {
-#ifdef PLASTIX_HAS_CUDA
-        if (NumUnits > 0) {
-          unsigned Block = cuda::DefaultBlockSize;
-          unsigned Grid =
-              static_cast<unsigned>(cuda::GridSize(NumUnits, Block));
-          cuda::AddUnitsKernel<AP>
-              <<<Grid, Block>>>(NumUnits, MaxLevels, UnitAlloc, Globals);
-          cudaDeviceSynchronize();
-        }
-#endif
-      } else {
-        for (size_t I = 0; I < NumUnits; ++I) {
-          auto Offset = AP::AddUnit(UnitAlloc, I, *Globals);
-          if (Offset.has_value()) {
-            int32_t Base = GetLevel(UnitAlloc, I);
-            int32_t NewLevel =
-                std::clamp(Base + static_cast<int32_t>(*Offset), int32_t{1},
-                           static_cast<int32_t>(MaxLevels - 1));
-            auto NewId = UnitAlloc.Allocate();
-            GetLevel(UnitAlloc, NewId) = static_cast<uint16_t>(NewLevel);
-            AP::InitUnit(UnitAlloc, NewId, I, *Globals);
-          }
-        }
-      }
+      if constexpr (HasCuda && Traits::KernelizeAdd)
+        gpu::DoAddUnits<AP>(UnitAlloc, Globals, MaxLevels);
+      else
+        cpu::DoAddUnits<AP>(UnitAlloc, Globals, MaxLevels);
     }
   }
   void DoAddConnections() {
@@ -563,192 +284,14 @@ public:
     else {
       using AC = typename Traits::AddConn;
       constexpr uint16_t N = Traits::Neighbourhood;
-      size_t NumUnits = UnitAlloc.Size();
-
-#ifdef PLASTIX_HAS_CUDA
-      constexpr bool CanKernel = Traits::KernelizeAdd;
-#else
-      constexpr bool CanKernel = false;
-#endif
-
-      if constexpr (CanKernel) {
-#ifdef PLASTIX_HAS_CUDA
-        if (NumUnits == 0)
-          return;
-        static_assert(sizeof(CompactEdge) == sizeof(uint64_t),
-                      "CompactEdge must be bit-compatible with uint64_t for "
-                      "the device proposal pipeline");
-        CompactEdge *PropsEdges =
-            ProposalAlloc.template GetArrayFor<ProposalTag>();
-        uint64_t *Props = reinterpret_cast<uint64_t *>(PropsEdges);
-        size_t MaxProposals = ProposalAlloc.GetCapacity();
-
-        // Phase 1: per-(U,V) collection. Skip Phase 0 entirely; the kernel
-        // reads each thread's level directly.
-        uint32_t *Counter = nullptr;
-        cudaMallocManaged(&Counter, sizeof(uint32_t));
-        *Counter = 0u;
-        size_t Total = NumUnits * NumUnits;
-        unsigned Block = cuda::DefaultBlockSize;
-        unsigned Grid = static_cast<unsigned>(cuda::GridSize(Total, Block));
-        cuda::CollectProposalsKernel<AC>
-            <<<Grid, Block>>>(NumUnits, N, UnitAlloc, Globals, Props, Counter,
-                              MaxProposals);
-        cudaDeviceSynchronize();
-        size_t NumProposals = *Counter;
-        cudaFree(Counter);
-        if (NumProposals > MaxProposals)
-          NumProposals = MaxProposals;
-        if (NumProposals == 0)
-          return;
-
-        // Phase 2: in-place radix sort of the packed 64-bit keys.
-        cuda::RadixSort64InPlace(Props, NumProposals);
-
-        // Phase 3: dedup-flag → exclusive scan → AllocateMany → commit.
-        uint32_t *Flags = nullptr;
-        cudaMallocManaged(&Flags, (NumProposals + 1) * sizeof(uint32_t));
-        unsigned FlagGrid =
-            static_cast<unsigned>(cuda::GridSize(NumProposals + 1, Block));
-        cuda::DedupFlagKernel<>
-            <<<FlagGrid, Block>>>(NumProposals, Props, Flags);
-        cuda::ExclusiveScanInPlace(Flags, NumProposals + 1);
-        cudaDeviceSynchronize();
-        uint32_t KeptCount = Flags[NumProposals];
-        if (KeptCount > 0) {
-          auto Range = ConnAlloc.AllocateMany(KeptCount);
-          if (Range.first != static_cast<size_t>(-1)) {
-            unsigned CommitGrid =
-                static_cast<unsigned>(cuda::GridSize(NumProposals, Block));
-            cuda::CommitProposalsKernel<AC><<<CommitGrid, Block>>>(
-                NumProposals, Props, Flags, Range.first, UnitAlloc, ConnAlloc,
-                Globals);
-            cudaDeviceSynchronize();
-            NeedsResort = true;
-          }
-        }
-        cudaFree(Flags);
-        return;
-#endif
-      }
-
-      // Phase 0: Build per-level unit index using KahnAlloc scratch.
-      // HighestLevel < NumUnits <= UnitAlloc.GetCapacity(), and
-      // KahnAlloc capacity = UnitAlloc.GetCapacity() + 1, so all
-      // level-indexed arrays fit.
-      uint32_t *LevelOffset = KahnAlloc.template GetArrayFor<InDegreeTag>();
-      uint32_t *UnitsByLevel = KahnAlloc.template GetArrayFor<FrontierTag>();
-      uint32_t *LevelWritePos = KahnAlloc.template GetArrayFor<OutOffsetTag>();
-
-      memset(LevelOffset, 0, (NumUnits + 1) * sizeof(uint32_t));
-      uint16_t HighestLevel = 0;
-      for (size_t I = 0; I < NumUnits; ++I) {
-        uint16_t Lvl = GetLevel(UnitAlloc, I);
-        ++LevelOffset[Lvl];
-        if (Lvl > HighestLevel)
-          HighestLevel = Lvl;
-      }
-
-      uint32_t Sum = 0;
-      for (uint16_t L = 0; L <= HighestLevel; ++L) {
-        uint32_t Count = LevelOffset[L];
-        LevelOffset[L] = Sum;
-        Sum += Count;
-      }
-      LevelOffset[HighestLevel + 1] = Sum;
-
-      memcpy(LevelWritePos, LevelOffset, (HighestLevel + 1) * sizeof(uint32_t));
-      for (size_t I = 0; I < NumUnits; ++I) {
-        uint16_t Lvl = GetLevel(UnitAlloc, I);
-        UnitsByLevel[LevelWritePos[Lvl]++] = static_cast<uint32_t>(I);
-      }
-
-      // Phase 1: Collect proposals via rolling level-pair window.
-      CompactEdge *Props = ProposalAlloc.template GetArrayFor<ProposalTag>();
-      size_t NumProposals = 0;
-      size_t MaxProposals = ProposalAlloc.GetCapacity();
-
-      // Process one level-pair (La <= Lb). For cross-level pairs,
-      // queries both (U,V) and (V,U) perspectives to match the
-      // original all-pairs semantics.
-      auto ProcessLevelPair = [&](uint16_t La, uint16_t Lb) {
-        for (uint32_t Ai = LevelOffset[La]; Ai < LevelOffset[La + 1]; ++Ai) {
-          uint32_t U = UnitsByLevel[Ai];
-          for (uint32_t Bi = LevelOffset[Lb]; Bi < LevelOffset[Lb + 1]; ++Bi) {
-            uint32_t V = UnitsByLevel[Bi];
-            if (U == V)
-              continue;
-
-            if (NumProposals < MaxProposals &&
-                AC::ShouldAddIncomingConnection(UnitAlloc, U, V, *Globals))
-              Props[NumProposals++] = {V, U};
-            if (NumProposals < MaxProposals &&
-                AC::ShouldAddOutgoingConnection(UnitAlloc, U, V, *Globals))
-              Props[NumProposals++] = {U, V};
-
-            if (La != Lb) {
-              if (NumProposals < MaxProposals &&
-                  AC::ShouldAddIncomingConnection(UnitAlloc, V, U, *Globals))
-                Props[NumProposals++] = {U, V};
-              if (NumProposals < MaxProposals &&
-                  AC::ShouldAddOutgoingConnection(UnitAlloc, V, U, *Globals))
-                Props[NumProposals++] = {V, U};
-            }
-          }
-        }
-      };
-
-      // Initial window [0, min(N, HighestLevel)].
-      uint16_t InitRight = (N <= HighestLevel) ? N : HighestLevel;
-      for (uint16_t La = 0; La <= InitRight; ++La)
-        for (uint16_t Lb = La; Lb <= InitRight; ++Lb)
-          ProcessLevelPair(La, Lb);
-
-      // Roll the window: each step adds one new right-edge level
-      // and pairs it with everything in the current window.
-      for (uint16_t NewRight = N + 1; NewRight <= HighestLevel; ++NewRight) {
-        uint16_t Left = NewRight - N;
-        for (uint16_t WinLevel = Left; WinLevel <= NewRight; ++WinLevel)
-          ProcessLevelPair(WinLevel, NewRight);
-      }
-
-      if (NumProposals == 0)
-        return;
-
-      // Phase 2: Sort proposals by packed (From, To) bits. CompactEdge is a
-      // trivial wrapper around uint64_t Bits, so a reinterpret_cast lets the
-      // CUDA radix-sort primitive sort the keys in place.
-#ifdef PLASTIX_HAS_CUDA
-      static_assert(sizeof(CompactEdge) == sizeof(uint64_t),
-                    "CompactEdge must be bit-compatible with uint64_t for "
-                    "the radix-sort fast path");
-      cuda::RadixSort64InPlace(reinterpret_cast<uint64_t *>(Props),
-                               NumProposals);
-#else
-      std::sort(Props, Props + NumProposals,
-                [](const CompactEdge &A, const CompactEdge &B) {
-                  return A.Bits < B.Bits;
-                });
-#endif
-
-      // Phase 3: Commit unique proposals.
-      size_t SizeBefore = ConnAlloc.Size();
-      uint64_t Prev = UINT64_MAX;
-      for (size_t I = 0; I < NumProposals; ++I) {
-        if (Props[I].Bits == Prev)
-          continue;
-        Prev = Props[I].Bits;
-
-        uint32_t F = Props[I].From();
-        uint32_t T = Props[I].To();
-        auto ConnId = ConnAlloc.Allocate();
-        GetField<FromIdTag>(ConnAlloc, ConnId) = F;
-        GetField<ToIdTag>(ConnAlloc, ConnId) = T;
-        GetField<SrcLevelTag>(ConnAlloc, ConnId) = GetLevel(UnitAlloc, F);
-        AC::InitConnection(UnitAlloc, F, T, ConnAlloc, ConnId, *Globals);
-      }
-
-      if (ConnAlloc.Size() > SizeBefore)
+      bool Committed;
+      if constexpr (HasCuda && Traits::KernelizeAdd)
+        Committed = gpu::DoAddConnections<AC>(UnitAlloc, ConnAlloc,
+                                              ProposalAlloc, Globals, N);
+      else
+        Committed = cpu::DoAddConnections<AC>(UnitAlloc, ConnAlloc, KahnAlloc,
+                                              ProposalAlloc, Globals, N);
+      if (Committed)
         NeedsResort = true;
     }
   }
@@ -781,140 +324,10 @@ public:
 
 private:
   void RecomputeLevels() {
-    size_t NumUnits = UnitAlloc.Size();
-    size_t NumConns = ConnAlloc.Size();
-
-    uint32_t *InDegree = KahnAlloc.template GetArrayFor<InDegreeTag>();
-    uint32_t *OutOffset = KahnAlloc.template GetArrayFor<OutOffsetTag>();
-    uint32_t *WritePos = KahnAlloc.template GetArrayFor<KahnWritePosTag>();
-    uint32_t *Frontier = KahnAlloc.template GetArrayFor<FrontierTag>();
-    uint32_t *NextFrontier = KahnAlloc.template GetArrayFor<NextFrontierTag>();
-    size_t *OutEdges = ConnAlloc.PermutationScratch();
-
-#ifdef PLASTIX_HAS_CUDA
-    constexpr bool CanKernel = true;
-#else
-    constexpr bool CanKernel = false;
-#endif
-
-    if constexpr (CanKernel) {
-#ifdef PLASTIX_HAS_CUDA
-      if (NumUnits > NumInput) {
-        size_t Span = NumUnits - NumInput;
-        unsigned Grid = static_cast<unsigned>(cuda::GridSize(Span));
-        cuda::ResetLevelsKernel<<<Grid, cuda::DefaultBlockSize>>>(
-            NumInput, NumUnits, UnitAlloc);
-      }
-
-      if (NumConns == 0) {
-        cudaDeviceSynchronize();
-        return;
-      }
-
-      cudaMemset(InDegree, 0, NumUnits * sizeof(uint32_t));
-      cudaMemset(OutOffset, 0, (NumUnits + 1) * sizeof(uint32_t));
-
-      unsigned ConnGrid = static_cast<unsigned>(cuda::GridSize(NumConns));
-      cuda::CountDegreesKernel<<<ConnGrid, cuda::DefaultBlockSize>>>(
-          NumConns, ConnAlloc, InDegree, OutOffset);
-
-      // Exclusive scan over OutOffset[0..NumUnits]; the slot at index NumUnits
-      // is zero-initialized so it ends up holding the total edge count.
-      cuda::ExclusiveScanInPlace(OutOffset, NumUnits + 1);
-
-      cudaMemcpy(WritePos, OutOffset, NumUnits * sizeof(uint32_t),
-                 cudaMemcpyDefault);
-      cuda::ScatterEdgesKernel<<<ConnGrid, cuda::DefaultBlockSize>>>(
-          NumConns, ConnAlloc, WritePos, OutEdges);
-
-      if (NumInput > 0) {
-        unsigned InputGrid = static_cast<unsigned>(cuda::GridSize(NumInput));
-        cuda::InitFrontierKernel<>
-            <<<InputGrid, cuda::DefaultBlockSize>>>(NumInput, Frontier);
-      }
-
-      uint32_t *NextSize = nullptr;
-      cudaMallocManaged(&NextSize, sizeof(uint32_t));
-      cudaDeviceSynchronize();
-
-      uint32_t FrontierSize = static_cast<uint32_t>(NumInput);
-      uint16_t CurrentLevel = 0;
-      while (FrontierSize > 0) {
-        *NextSize = 0;
-        unsigned FrontierGrid =
-            static_cast<unsigned>(cuda::GridSize(FrontierSize));
-        cuda::ProcessFrontierKernel<<<FrontierGrid, cuda::DefaultBlockSize>>>(
-            FrontierSize, CurrentLevel, UnitAlloc, ConnAlloc, InDegree,
-            OutOffset, OutEdges, Frontier, NextFrontier, NextSize);
-        cudaDeviceSynchronize();
-        ++CurrentLevel;
-        std::swap(Frontier, NextFrontier);
-        FrontierSize = *NextSize;
-      }
-
-      cudaFree(NextSize);
-#endif
-    } else {
-      for (size_t I = NumInput; I < NumUnits; ++I)
-        GetLevel(UnitAlloc, I) = 0;
-
-      if (NumConns == 0)
-        return;
-
-      memset(InDegree, 0, NumUnits * sizeof(uint32_t));
-      memset(OutOffset, 0, (NumUnits + 1) * sizeof(uint32_t));
-
-      // Count in-degree and out-degree per unit
-      for (size_t C = 0; C < NumConns; ++C) {
-        if (GetField<DeadTag>(ConnAlloc, C))
-          continue;
-        ++OutOffset[GetField<FromIdTag>(ConnAlloc, C)];
-        ++InDegree[GetField<ToIdTag>(ConnAlloc, C)];
-      }
-
-      // Prefix sum: convert out-degrees in OutOffset to cumulative offsets
-      uint32_t Sum = 0;
-      for (size_t I = 0; I < NumUnits; ++I) {
-        uint32_t Deg = OutOffset[I];
-        OutOffset[I] = Sum;
-        Sum += Deg;
-      }
-      OutOffset[NumUnits] = Sum;
-
-      // Scatter connections into OutEdges
-      memcpy(WritePos, OutOffset, NumUnits * sizeof(uint32_t));
-      for (size_t C = 0; C < NumConns; ++C) {
-        if (GetField<DeadTag>(ConnAlloc, C))
-          continue;
-        uint32_t From = GetField<FromIdTag>(ConnAlloc, C);
-        OutEdges[WritePos[From]++] = C;
-      }
-
-      // Input units [0, NumInput) are always the level-0 frontier
-      for (size_t I = 0; I < NumInput; ++I)
-        Frontier[I] = static_cast<uint32_t>(I);
-      uint32_t FrontierSize = static_cast<uint32_t>(NumInput);
-
-      // Level-parallel Kahn's algorithm
-      uint16_t CurrentLevel = 0;
-      while (FrontierSize > 0) {
-        uint32_t NextSize = 0;
-        for (uint32_t F = 0; F < FrontierSize; ++F) {
-          uint32_t U = Frontier[F];
-          for (uint32_t E = OutOffset[U]; E < OutOffset[U + 1]; ++E) {
-            size_t C = OutEdges[E];
-            uint32_t To = GetField<ToIdTag>(ConnAlloc, C);
-            if (--InDegree[To] == 0) {
-              GetLevel(UnitAlloc, To) = static_cast<uint16_t>(CurrentLevel + 1);
-              NextFrontier[NextSize++] = To;
-            }
-          }
-        }
-        ++CurrentLevel;
-        std::swap(Frontier, NextFrontier);
-        FrontierSize = NextSize;
-      }
-    }
+    if constexpr (HasCuda)
+      gpu::RecomputeLevels(UnitAlloc, ConnAlloc, KahnAlloc, NumInput);
+    else
+      cpu::RecomputeLevels(UnitAlloc, ConnAlloc, KahnAlloc, NumInput);
   }
 
   void SortConnectionsByLevel() {
