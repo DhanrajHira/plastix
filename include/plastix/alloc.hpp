@@ -10,19 +10,7 @@
 #include <utility>
 
 #ifdef PLASTIX_HAS_CUDA
-#include <cstdio>
-#include <cstdlib>
 #include <cuda/std/atomic>
-#include <cuda_runtime.h>
-#define PLASTIX_CUDA_CHECK(stmt)                                               \
-  do {                                                                         \
-    cudaError_t Err__ = (stmt);                                                \
-    if (Err__ != cudaSuccess) {                                                \
-      std::fprintf(stderr, "CUDA error at %s:%d: %s\n", __FILE__, __LINE__,    \
-                   cudaGetErrorString(Err__));                                 \
-      std::abort();                                                            \
-    }                                                                          \
-  } while (0)
 #else
 #include <atomic>
 #include <sys/mman.h>

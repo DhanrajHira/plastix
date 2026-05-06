@@ -48,10 +48,10 @@ PLASTIX_HOST void ExclusiveScanInPlace(T *Data, size_t N) {
   cub::DeviceScan::ExclusiveSum(nullptr, TempBytes, Data, Data,
                                 static_cast<int>(N));
   void *Temp = nullptr;
-  cudaMalloc(&Temp, TempBytes);
+  PLASTIX_CUDA_CHECK(cudaMalloc(&Temp, TempBytes));
   cub::DeviceScan::ExclusiveSum(Temp, TempBytes, Data, Data,
                                 static_cast<int>(N));
-  cudaFree(Temp);
+  PLASTIX_CUDA_CHECK(cudaFree(Temp));
 }
 
 // ---------------------------------------------------------------------------
@@ -78,6 +78,7 @@ PLASTIX_HOST void AddOnesIntoSlot(float *Slot, size_t N) {
     return;
   unsigned Grid = static_cast<unsigned>(GridSize(N));
   detail::AddOnesKernel<><<<Grid, DefaultBlockSize>>>(Slot, N);
+  PLASTIX_CUDA_CHECK_KERNEL();
 }
 
 // ---------------------------------------------------------------------------
@@ -146,8 +147,8 @@ PLASTIX_HOST void RadixSort64InPlace(uint64_t *Data, size_t N) {
     return;
   uint64_t *Scratch = nullptr;
   uint32_t *Flags = nullptr;
-  cudaMallocManaged(&Scratch, N * sizeof(uint64_t));
-  cudaMallocManaged(&Flags, (N + 1) * sizeof(uint32_t));
+  PLASTIX_CUDA_CHECK(cudaMallocManaged(&Scratch, N * sizeof(uint64_t)));
+  PLASTIX_CUDA_CHECK(cudaMallocManaged(&Flags, (N + 1) * sizeof(uint32_t)));
 
   uint64_t *In = Data;
   uint64_t *Out = Scratch;
@@ -156,18 +157,20 @@ PLASTIX_HOST void RadixSort64InPlace(uint64_t *Data, size_t N) {
   for (int Bit = 0; Bit < 64; ++Bit) {
     detail::RadixBitFlagKernel<>
         <<<GridP1, DefaultBlockSize>>>(N, In, Flags, Bit);
+    PLASTIX_CUDA_CHECK_KERNEL();
     ExclusiveScanInPlace(Flags, N + 1);
-    cudaDeviceSynchronize();
+    PLASTIX_CUDA_CHECK(cudaDeviceSynchronize());
     uint32_t ZeroCount = Flags[N];
     detail::RadixBitScatterKernel<>
         <<<Grid, DefaultBlockSize>>>(N, In, Out, Flags, ZeroCount, Bit);
+    PLASTIX_CUDA_CHECK_KERNEL();
     uint64_t *Tmp = In;
     In = Out;
     Out = Tmp;
   }
-  cudaDeviceSynchronize();
-  cudaFree(Scratch);
-  cudaFree(Flags);
+  PLASTIX_CUDA_CHECK(cudaDeviceSynchronize());
+  PLASTIX_CUDA_CHECK(cudaFree(Scratch));
+  PLASTIX_CUDA_CHECK(cudaFree(Flags));
 }
 
 } // namespace cuda

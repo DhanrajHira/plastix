@@ -13,6 +13,8 @@
 #include <span>
 #include <type_traits>
 
+#include "plastix/macros.hpp"
+
 #ifdef PLASTIX_HAS_CUDA
 #include <cuda_runtime.h>
 #endif
@@ -98,7 +100,7 @@ template <NetworkTraits Traits> class Network {
   static GlobalState *AllocGlobals() {
 #ifdef PLASTIX_HAS_CUDA
     void *P = nullptr;
-    cudaMallocManaged(&P, sizeof(GlobalState));
+    PLASTIX_CUDA_CHECK(cudaMallocManaged(&P, sizeof(GlobalState)));
 #else
     void *P = ::operator new(sizeof(GlobalState));
 #endif
@@ -143,7 +145,7 @@ public:
     if (Globals) {
       Globals->~GlobalState();
 #ifdef PLASTIX_HAS_CUDA
-      cudaFree(Globals);
+      PLASTIX_CUDA_CHECK(cudaFree(Globals));
 #else
       ::operator delete(Globals);
 #endif
