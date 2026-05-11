@@ -4,6 +4,7 @@
 #include "plastix/macros.hpp"
 
 #include <algorithm>
+#include <numeric>
 #include <cstddef>
 #include <new>
 #include <tuple>
@@ -100,13 +101,18 @@ template <typename T, typename... Fields> class SOAAllocator {
     return std::max({sizeof(typename Fields::Type)...});
   }
 
+  static constexpr size_t SumFieldSize() {
+    static_assert(sizeof...(Fields) > 0, "Fields pack must not be empty");
+    return (sizeof(typename Fields::Type) + ...);
+  }
+
 public:
   // Mark host/device callable accessors. The hot loop inside CUDA kernels
   // calls Get<Tag>() per element, so it must be device-callable.
   explicit SOAAllocator(size_t NumElements)
       : FieldPtrs{}, BackFieldPtrs{}, PermScratch{nullptr}, CountPtr{nullptr},
         Capacity{NumElements}, Owns{true} {
-    size_t ArenaSize = NumElements * MaxFieldSize();
+    size_t ArenaSize = NumElements * SumFieldSize();
     std::apply(
         [ArenaSize](auto &...Ptrs) {
           ((Ptrs =
@@ -129,10 +135,7 @@ public:
     ::new (CountPtr) AtomicCount{0};
   }
 
-  // Host-only destructor body. The shallow-copy path (kernel parameters) lands
-  // inside __device__ contexts where cudaFree is unavailable; the device
-  // path is deliberately empty. The host-side owning instance is responsible
-  // for the eventual free.
+  // Host-only destructor body.
   ~SOAAllocator() {
 #ifndef __CUDA_ARCH__
     if (!Owns)
@@ -140,7 +143,7 @@ public:
     if (CountPtr)
       CountPtr->~AtomicCount();
     detail::FreeStorage(CountPtr, sizeof(AtomicCount));
-    size_t ArenaSize = Capacity * MaxFieldSize();
+    size_t ArenaSize = Capacity * SumFieldSize();
     std::apply(
         [ArenaSize](auto *...Ptrs) {
           ((detail::FreeStorage(Ptrs, ArenaSize)), ...);
@@ -156,8 +159,7 @@ public:
   }
 
   // Shallow copy: shares pointers, does NOT take ownership. Used to hand the
-  // allocator into a CUDA kernel by value. Move + assign remain disabled
-  // because there's no use case for them in the framework.
+  // allocator into a CUDA kernel by value.
   PLASTIX_HD SOAAllocator(const SOAAllocator &Other) noexcept
       : FieldPtrs{Other.FieldPtrs}, BackFieldPtrs{Other.BackFieldPtrs},
         PermScratch{Other.PermScratch}, CountPtr{Other.CountPtr},
@@ -261,10 +263,6 @@ public:
 
 } // namespace alloc
 
-// Free-function shorthand for Alloc.template Get<Tag>(Id). Avoids the
-// `.template` disambiguator when the allocator is a dependent type (e.g.
-// `auto &` policy parameters) and reads a bit cleaner at call sites.
-// Const-propagates via auto& deduction.
 template <typename Tag>
 PLASTIX_HD constexpr auto &GetField(auto &Alloc, size_t Id) {
   return Alloc.template Get<Tag>(Id);
