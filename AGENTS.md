@@ -4,6 +4,11 @@ Guidance for AI coding agents working in this repository. Keep this file current
 
 ## What this project is
 
+This repository contains an implementation for a library called Plastix. This
+library is built to facilitate the development of highly sparse and highly
+dynamic networks and algorithms. This file and the files in @.agents provide
+context for the repository.
+
 Plastix is a C++20 neural-network library that treats a network as a policy-driven simulation over pluggable Structure-of-Arrays (SOA) allocators. Instead of hard-coding a forward pass, loss, or learning rule, the library exposes a `Network<Traits>` template parameterized by a `NetworkTraits` type. The traits are a bundle of policy structs (forward pass, backward pass, loss, unit update, connection update, prune, add-unit, add-connection, reset-global) plus lists of extra per-unit and per-connection fields. The framework's `DoStep` orchestrates these policies in a fixed order, and `if constexpr` compiles out any policy that is left at its `NoX` sentinel default.
 
 The result: algorithms as different as vanilla MLP backprop (`mlp-xor`), linear regression (`linear-regression`), TD(λ) with meta-learned step sizes (`swifttd`), streaming incremental Predictive Coding (`ipc-linear`, `ipc-multilayer`), and a dynamically growing imprinting learner all compile to tight loops over the same core `DoStep` scaffolding.
