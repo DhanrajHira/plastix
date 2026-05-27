@@ -21,21 +21,7 @@ target_include_directories(plastix PUBLIC
 
 target_compile_options(plastix PRIVATE -Wall -Wextra -Wpedantic)
 
-# CCCL (Thrust + CUB + libcudacxx) is a hard dependency: random.hpp uses
-# thrust::random for host/device-portable RNG, and cuda_primitives.hpp
-# wraps cub::DeviceScan / cub::DeviceRadixSort. CCCL ships with the CUDA
-# toolkit but its CMake config lives outside the default search path, so
-# we use CUDAToolkit's discovery to point find_package at the right dir.
-find_package(CUDAToolkit REQUIRED)
-list(APPEND CMAKE_PREFIX_PATH "${CUDAToolkit_LIBRARY_ROOT}")
-find_package(CCCL CONFIG REQUIRED)
-target_link_libraries(plastix PUBLIC CCCL::CCCL)
-
-# When PLASTIX_ENABLE_CUDA is on, every .cpp in the project is compiled as
-# CUDA so nvcc sees PLASTIX_HD-marked code in both host and device flavors.
-# The library itself, the tests, and the examples flip language uniformly.
-# This helper centralizes the language-flip + compile-options policy. It
-# expects the targets it's given to already exist.
+# When PLASTIX_ENABLE_CUDA is on, every .hpp in the project is compiled as CUDA
 function(plastix_enable_cuda_on_target target)
     if(NOT PLASTIX_ENABLE_CUDA)
         return()
@@ -62,17 +48,21 @@ function(plastix_enable_cuda_on_target target)
 endfunction()
 
 if(PLASTIX_ENABLE_CUDA)
+    find_package(CUDAToolkit REQUIRED)
+    list(APPEND CMAKE_PREFIX_PATH "${CUDAToolkit_LIBRARY_ROOT}")
+    find_package(CCCL CONFIG REQUIRED)
+    target_link_libraries(plastix PUBLIC CCCL::CCCL)
+
     include(CheckLanguage)
     check_language(CUDA)
-    if(NOT CMAKE_CUDA_COMPILER)
+    set(PROPERTY CUDA_STANDARD_REQUIRED 20)
+    find_program(HAS_NVCC nvcc)
+    if(NOT HAS_NVCC)
         message(FATAL_ERROR
             "PLASTIX_ENABLE_CUDA=ON but no CUDA compiler was found. "
             "Install the CUDA Toolkit (nvcc) or disable PLASTIX_ENABLE_CUDA.")
     endif()
-    # Default to a fixed multi-arch list so reconfigures don't depend on
-    # the host's GPU being available at configure time. Pass
-    # -DCMAKE_CUDA_ARCHITECTURES=native if you want to target only the
-    # current device. No 75 because we rely on fast 32-bit float atomics.
+    # No 75, require 32-bit float atomics.
     if(NOT CMAKE_CUDA_ARCHITECTURES)
         set(CMAKE_CUDA_ARCHITECTURES "80;86;89;90" CACHE STRING
             "CUDA arches to compile for" FORCE)
@@ -80,10 +70,6 @@ if(PLASTIX_ENABLE_CUDA)
     enable_language(CUDA)
     set(CMAKE_CUDA_STANDARD 20)
     set(CMAKE_CUDA_STANDARD_REQUIRED ON)
-    file(GLOB PLASTIX_CUDA_SOURCES src/kernels/*.cu)
-    if(PLASTIX_CUDA_SOURCES)
-        target_sources(plastix PRIVATE ${PLASTIX_CUDA_SOURCES})
-    endif()
     target_compile_definitions(plastix PUBLIC PLASTIX_HAS_CUDA)
     set_target_properties(plastix PROPERTIES
         CUDA_ARCHITECTURES "${CMAKE_CUDA_ARCHITECTURES}"
