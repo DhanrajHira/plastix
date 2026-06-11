@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.20)
+cmake_minimum_required(VERSION 4.0)
 project(plastix VERSION 0.1.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
@@ -11,13 +11,30 @@ option(PLASTIX_BUILD_BENCHMARKS "Build benchmarks" ON)
 option(PLASTIX_BUILD_EXAMPLES "Build examples" ON)
 option(PLASTIX_ENABLE_CUDA "Enable CUDA support" OFF)
 
+include(GNUInstallDirs)
+
+# Default install rules ON only when plastix is the top-level project
+option(PLASTIX_INSTALL "Generate install + find_package rules for plastix" ${PROJECT_IS_TOP_LEVEL})
+
 add_library(plastix)
+add_library(plastix::plastix ALIAS plastix) # common namespace
 target_sources(plastix PRIVATE src/plastix.cpp)
 
-target_include_directories(plastix PUBLIC
-    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-    $<INSTALL_INTERFACE:include>
+# Public headers as a FILE_SET
+file(GLOB_RECURSE PLASTIX_PUBLIC_HEADERS CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/include/plastix/*.hpp")
+if(NOT PLASTIX_ENABLE_CUDA)
+    list(FILTER PLASTIX_PUBLIC_HEADERS EXCLUDE
+         REGEX "/cuda_(kernels|primitives)\\.hpp$")
+endif()
+target_sources(plastix PUBLIC
+    FILE_SET plastix_headers TYPE HEADERS
+    BASE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/include"
+    FILES ${PLASTIX_PUBLIC_HEADERS}
 )
+
+# Propagate the C++20 requirement to consumers
+target_compile_features(plastix PUBLIC cxx_std_20)
 
 target_compile_options(plastix PRIVATE -Wall -Wextra -Wpedantic)
 
@@ -35,7 +52,6 @@ function(plastix_enable_cuda_on_target target)
         endif()
     endforeach()
     # Relax host-flag warnings that are noisy under nvcc's host-pass invocation
-    # but not actionable, and silence the "extended-lambda" notice on policies.
     target_compile_options(${target} PRIVATE
         $<$<COMPILE_LANGUAGE:CUDA>:--extended-lambda>
         $<$<COMPILE_LANGUAGE:CUDA>:--expt-relaxed-constexpr>
@@ -103,4 +119,45 @@ if(PLASTIX_BUILD_BENCHMARKS)
     )
     FetchContent_MakeAvailable(googlebenchmark)
     add_subdirectory(benchmarks)
+endif()
+
+# ---------------------------------------------------------------------------
+# Install + find_package(plastix) support
+# ---------------------------------------------------------------------------
+if(PLASTIX_INSTALL)
+    include(CMakePackageConfigHelpers)
+
+    set(PLASTIX_CMAKE_CONFIG_DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/plastix")
+
+    install(TARGETS plastix
+        EXPORT plastixTargets
+        LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+        ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+        RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
+        FILE_SET plastix_headers DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}"
+    )
+
+    install(EXPORT plastixTargets
+        FILE plastixTargets.cmake
+        NAMESPACE plastix::
+        DESTINATION "${PLASTIX_CMAKE_CONFIG_DESTINATION}"
+    )
+
+    configure_package_config_file(
+        "${CMAKE_CURRENT_SOURCE_DIR}/cmake/plastixConfig.cmake.in"
+        "${CMAKE_CURRENT_BINARY_DIR}/plastixConfig.cmake"
+        INSTALL_DESTINATION "${PLASTIX_CMAKE_CONFIG_DESTINATION}"
+    )
+
+    write_basic_package_version_file(
+        "${CMAKE_CURRENT_BINARY_DIR}/plastixConfigVersion.cmake"
+        VERSION "${PROJECT_VERSION}"
+        COMPATIBILITY SameMajorVersion
+    )
+
+    install(FILES
+        "${CMAKE_CURRENT_BINARY_DIR}/plastixConfig.cmake"
+        "${CMAKE_CURRENT_BINARY_DIR}/plastixConfigVersion.cmake"
+        DESTINATION "${PLASTIX_CMAKE_CONFIG_DESTINATION}"
+    )
 endif()
