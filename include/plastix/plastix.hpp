@@ -109,8 +109,9 @@ public:
              sizeof...(Builders) > 0 &&
              (LayerBuilder<Builders, UnitAllocator, ConnAllocator> && ...))
   Network(size_t InputDim, InputInit Init, Builders... Layers)
-      : NumInput(InputDim), UnitAlloc(4096), ConnAlloc(4096 * 4),
-        Globals(AllocGlobals()), KahnAlloc(UnitAlloc.GetCapacity() + 1),
+      : NumInput(InputDim), UnitAlloc(Traits::UnitCapacity),
+        ConnAlloc(Traits::ConnCapacity), Globals(AllocGlobals()),
+        KahnAlloc(UnitAlloc.GetCapacity() + 1),
         ProposalAlloc(ConnAlloc.GetCapacity()) {
     for (size_t I = 0; I < InputDim; ++I) {
       auto Id = UnitAlloc.Allocate();
@@ -269,6 +270,19 @@ public:
     }
   }
 
+  // Reclaim slots in ConnAlloc held by tombstoned (DeadTag=true) entries.
+  // (unit compaction not yet implemented)
+  void DoCompactConnections() {
+    if constexpr (!NetworkShrinks<Traits> || !HasConnAdd<Traits>)
+      return;
+    else {
+      cpu::DoCompactConnections(ConnAlloc);
+      // Compaction preserves the relative order of live connections
+      if constexpr (Traits::Model == Propagation::Topological)
+        NeedsResort = true;
+    }
+  }
+
   void DoAddUnits() {
     if constexpr (std::is_same_v<typename Traits::AddUnit, NoAddUnit>)
       return;
@@ -307,6 +321,7 @@ public:
     DoUpdateConnectionState();
     DoPruneUnits();
     DoPruneConnections();
+    DoCompactConnections();
     DoAddUnits();
     DoAddConnections();
     if constexpr (Traits::Model == Propagation::Topological) {

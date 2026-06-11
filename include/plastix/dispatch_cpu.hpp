@@ -1,14 +1,8 @@
 #ifndef PLASTIX_DISPATCH_CPU_HPP
 #define PLASTIX_DISPATCH_CPU_HPP
 
-// Host-only implementations of every per-step phase. Each function is a
-// free template that takes the allocators and any extra state by reference
-// so it can stand in as a drop-in replacement for the in-class loop body
-// it used to live as. Pure C++; no CUDA syntax, no `cuda::` references.
-//
-// The matching GPU launchers live in `dispatch_gpu.hpp`. The dispatch site
-// in `Network<Traits>::Do*` picks one with a single `if constexpr`.
-
+// Host-only implementations of every per-step phase.
+// The matching GPU launchers live in `dispatch_gpu.hpp`.
 #include "plastix/conn.hpp"
 #include "plastix/macros.hpp"
 #include "plastix/unit_state.hpp"
@@ -20,12 +14,8 @@
 
 namespace plastix {
 
-// CompactEdge / LevelRange are framework-internal types used by both
-// dispatch backends. Forward-declared here so dispatch_cpu.hpp doesn't
-// need to pull in plastix.hpp (which would form a cycle); the real
-// definitions still live next to `Network<Traits>`.
-struct LevelRange;
-struct CompactEdge;
+struct LevelRange; // internal
+struct CompactEdge; // internal
 struct InDegreeTag;
 struct OutOffsetTag;
 struct KahnWritePosTag;
@@ -228,6 +218,31 @@ inline void DoPruneConnections(UA &UnitAlloc, CA &ConnAlloc, Globals *G) {
     if (Remove)
       GetField<DeadTag>(ConnAlloc, C) = true;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Compaction phase
+// ---------------------------------------------------------------------------
+//
+// Reclaim the slots of tombstoned (DeadTag=true) connections by gathering
+// live entries into a contiguous prefix of the arena.
+
+template <typename CA> inline void DoCompactConnections(CA &ConnAlloc) {
+  size_t N = ConnAlloc.Size();
+  if (N == 0)
+    return;
+
+  size_t *Perm = ConnAlloc.PermutationScratch();
+  size_t NumLive = 0;
+  for (size_t C = 0; C < N; ++C)
+    if (!GetField<DeadTag>(ConnAlloc, C))
+      Perm[NumLive++] = C;
+
+  if (NumLive == N)
+    return;
+
+  ConnAlloc.Gather(NumLive);
+  ConnAlloc.SetCount(NumLive);
 }
 
 // ---------------------------------------------------------------------------

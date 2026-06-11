@@ -269,30 +269,70 @@ template <typename Global = EmptyGlobalState> struct DefaultNetworkTraits {
   using ExtraConnFields = ConnFieldList<alloc::SOAField<WeightTag, float>>;
   static constexpr uint16_t Neighbourhood = 1;
   static constexpr Propagation Model = Propagation::Topological;
+  // Per-network allocator capacities.
+  static constexpr size_t UnitCapacity = 4096;
+  static constexpr size_t ConnCapacity = 4096 * 4;
   // Opt-out flags for policies that are not device-safe (host-only state,
-  // unsafe reductions like `G.Tau += ...` in update). When false, the
-  // corresponding DoX phase always runs the host loop, even on a CUDA
-  // build. Default true: most policies are pure SOA reads/writes and safe
-  // to parallelize.
+  // unsafe reductions like `G.Tau += ...` in update)
   static constexpr bool KernelizeUpdate = true;
   static constexpr bool KernelizePrune = true;
   static constexpr bool KernelizeAdd = true;
 };
 
 // ---------------------------------------------------------------------------
-// NetworkTraits concept — validates that all policies satisfy their concepts
+// Allocator type helpers
 // ---------------------------------------------------------------------------
 
-// Helper: resolve the unit allocator for a given traits type.
+// Resolve the unit allocator for a given traits type.
 template <typename T>
 using UnitAllocFor =
     MakeUnitAllocatorFrom<typename T::ForwardPass::Accumulator,
                           typename T::BackwardPass::Accumulator,
                           typename T::ExtraUnitFields>;
 
-// Helper: resolve the connection allocator for a given traits type.
+// Resolve the connection allocator for a given traits type.
 template <typename T>
 using ConnAllocFor = MakeConnAllocatorFrom<typename T::ExtraConnFields>;
+
+// ---------------------------------------------------------------------------
+// Traits inspection helpers for compile time behaviour optimizations
+// ---------------------------------------------------------------------------
+
+template <typename T>
+inline constexpr bool HasUnitPrune =
+    !std::is_same_v<typename T::PruneUnit, NoPruneUnit>;
+
+template <typename T>
+inline constexpr bool HasConnPrune =
+    !std::is_same_v<typename T::PruneConn, NoPruneConn>;
+
+template <typename T>
+inline constexpr bool HasUnitAdd =
+    !std::is_same_v<typename T::AddUnit, NoAddUnit>;
+
+template <typename T>
+inline constexpr bool HasConnAdd =
+    !std::is_same_v<typename T::AddConn, NoAddConn>;
+
+// The network can add new units or connections.
+template <typename T>
+inline constexpr bool NetworkGrows = HasUnitAdd<T> || HasConnAdd<T>;
+
+// The network can prune existing units or connections.
+template <typename T>
+inline constexpr bool NetworkShrinks = HasUnitPrune<T> || HasConnPrune<T>;
+
+// The network's topology can change at runtime in either direction.
+template <typename T>
+inline constexpr bool IsDynamic = NetworkGrows<T> || NetworkShrinks<T>;
+
+// network only decreases in size
+template <typename T>
+inline constexpr bool IsMonotonic = !NetworkGrows<T> && NetworkShrinks<T>;
+
+// ---------------------------------------------------------------------------
+// NetworkTraits concept — validates that all policies satisfy their concepts
+// ---------------------------------------------------------------------------
 
 template <typename T>
 concept NetworkTraits =

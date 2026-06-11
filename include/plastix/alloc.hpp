@@ -245,6 +245,9 @@ public:
   PLASTIX_HD size_t Size() const { return CountPtr->load(); }
   PLASTIX_HD size_t GetCapacity() const { return Capacity; }
 
+  // Overrite count for compression
+  PLASTIX_HD void SetCount(size_t NewCount) { CountPtr->store(NewCount); }
+
   PLASTIX_HD size_t *PermutationScratch() { return PermScratch; }
 
   void Gather(size_t N) {
