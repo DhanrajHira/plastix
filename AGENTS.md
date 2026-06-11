@@ -39,7 +39,7 @@ agents/                    Skills/recipes for AI agents (see agents/README.md)
 
 ## Build and test
 
-CMake ≥ 3.20, C++20. The tree uses `FetchContent` for GoogleTest 1.15.2 and Google Benchmark 1.9.1, so the first configure downloads them.
+CMake ≥ 4.0, C++20. The tree uses `FetchContent` for GoogleTest 1.15.2 and Google Benchmark 1.9.1, so the first configure downloads them.
 
 ```bash
 cmake -S . -B build                    # configure (all options ON by default)
@@ -56,8 +56,24 @@ CMake options (all default ON except CUDA):
 - `PLASTIX_BUILD_EXAMPLES`
 - `PLASTIX_BUILD_BENCHMARKS`
 - `PLASTIX_ENABLE_CUDA` — wires in `src/kernels/*.cu` if present and defines `PLASTIX_HAS_CUDA`. No kernels currently ship in the tree.
+- `PLASTIX_INSTALL` — generate install + `find_package` rules. Defaults to ON when plastix is the top-level project and OFF when consumed via `add_subdirectory`/`FetchContent`.
 
-The library target is named `plastix`. Link examples and tests with `target_link_libraries(<target> PRIVATE plastix)`.
+The library target is named `plastix`, with an alias `plastix::plastix`. In-tree examples and tests link with `target_link_libraries(<target> PRIVATE plastix)`.
+
+### Installing and consuming via `find_package`
+
+`cmake --install <build-dir> --prefix <prefix>` installs the static library, the public headers, and a CMake package config under `<prefix>/lib/cmake/plastix/`. Downstream projects then consume it the standard way:
+
+```cmake
+find_package(plastix REQUIRED)
+target_link_libraries(myapp PRIVATE plastix::plastix)   # C++20 is propagated automatically
+```
+
+(point `CMAKE_PREFIX_PATH` at `<prefix>` if it is non-standard). Notes on how the package is assembled:
+
+- The public headers are exported as a `FILE_SET` (`plastix_headers`), which drives the build- and install-interface include directories from one source. The C++20 requirement rides along via `target_compile_features(... cxx_std_20)`, so consumers do not set the standard themselves.
+- The header install is **filtered by CUDA**: `cuda_kernels.hpp` and `cuda_primitives.hpp` are only `#include`d under `PLASTIX_HAS_CUDA` (`dispatch_gpu.hpp` keeps a non-CUDA stub path), so they are installed only when `PLASTIX_ENABLE_CUDA=ON`. The glob that builds the header set lives next to `add_library(plastix)`; if you add a new CUDA-only header, extend the `list(FILTER ... EXCLUDE REGEX ...)` there.
+- The generated `plastixConfig.cmake` re-runs `find_dependency(CUDAToolkit)` / `find_dependency(CCCL)` only when the library was built with CUDA, since those are `PUBLIC` link dependencies in that configuration.
 
 ## Core architecture
 

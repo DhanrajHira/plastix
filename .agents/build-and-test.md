@@ -12,12 +12,15 @@ Starting work in a fresh clone, after pulling new dependencies, or when a build 
 cmake -S . -B build
 ```
 
+Requires CMake ≥ 4.0.
+
 Optional flags (all default ON except CUDA):
 
 - `-DPLASTIX_BUILD_TESTS=OFF`
 - `-DPLASTIX_BUILD_EXAMPLES=OFF`
 - `-DPLASTIX_BUILD_BENCHMARKS=OFF`
 - `-DPLASTIX_ENABLE_CUDA=ON` — only meaningful when `src/kernels/*.cu` exists.
+- `-DPLASTIX_INSTALL=OFF` — skip install/`find_package` rules (defaults ON at top level).
 
 Debug / sanitizer configs:
 
@@ -60,6 +63,24 @@ build/examples/mlp-xor/mlp_xor
 build/examples/swifttd/swifttd
 build/examples/ipc-linear/ipc_linear
 ```
+
+### Install and consume via `find_package`
+
+```bash
+cmake -S . -B build -DPLASTIX_BUILD_TESTS=OFF -DPLASTIX_BUILD_EXAMPLES=OFF \
+                    -DPLASTIX_BUILD_BENCHMARKS=OFF
+cmake --build build -j
+cmake --install build --prefix /tmp/plx-prefix
+```
+
+A downstream `CMakeLists.txt` then does:
+
+```cmake
+find_package(plastix REQUIRED)              # add -DCMAKE_PREFIX_PATH=/tmp/plx-prefix when configuring
+target_link_libraries(myapp PRIVATE plastix::plastix)
+```
+
+`cuda_kernels.hpp` / `cuda_primitives.hpp` are installed only under `-DPLASTIX_ENABLE_CUDA=ON`; the header set and its CUDA filter live next to `add_library(plastix)` in the top-level `CMakeLists.txt`.
 
 ## Pitfalls
 
