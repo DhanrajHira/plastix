@@ -66,8 +66,23 @@ endfunction()
 if(PLASTIX_ENABLE_CUDA)
     find_package(CUDAToolkit REQUIRED)
     list(APPEND CMAKE_PREFIX_PATH "${CUDAToolkit_LIBRARY_ROOT}")
-    find_package(CCCL CONFIG REQUIRED)
-    target_link_libraries(plastix PUBLIC CCCL::CCCL)
+
+    # CCCL (thrust/cub/libcudacxx) ships inside the CUDA toolkit (>= 12.4), but
+    # not every install includes its standalone CMake package config. Prefer the
+    # config package when present; otherwise fall back to the CCCL headers that
+    # CUDAToolkit already exposes via CUDAToolkit_INCLUDE_DIRS (which includes
+    # the bundled .../include/cccl directory).
+    find_package(CCCL CONFIG QUIET)
+    if(CCCL_FOUND)
+        target_link_libraries(plastix PUBLIC CCCL::CCCL)
+    else()
+        message(STATUS
+            "CCCL package config not found; using CCCL headers bundled with the "
+            "CUDA toolkit (${CUDAToolkit_INCLUDE_DIRS})")
+        target_link_libraries(plastix PUBLIC CUDA::cudart)
+        target_include_directories(plastix SYSTEM PUBLIC
+            "$<BUILD_INTERFACE:${CUDAToolkit_INCLUDE_DIRS}>")
+    endif()
 
     include(CheckLanguage)
     check_language(CUDA)

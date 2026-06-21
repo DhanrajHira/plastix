@@ -184,3 +184,27 @@ if(PLASTIX_TORCH_AVAILABLE)
     target_compile_options(bench_time_to_quality PRIVATE ${TORCH_CXX_FLAGS})
     target_compile_definitions(bench_time_to_quality PRIVATE PLASTIX_HAVE_TORCH=1)
 endif()
+
+# ---------------------------------------------------------------------------
+# CUDA: every in-tree benchmark includes the Plastix headers, which under
+# PLASTIX_ENABLE_CUDA pull in CUB/Thrust device code and the <<<>>> dispatch
+# path. Those only compile through nvcc, so the benchmark .cpp TUs must be
+# built as CUDA, exactly like the examples and tests. (bench_spmv_crossover_gpu
+# is already a .cu and is handled at its own definition above.) The host-only
+# optimization / libtorch flags set above are forwarded to the host pass via
+# nvcc's -forward-unknown-to-host-compiler, so they keep working unchanged.
+# ---------------------------------------------------------------------------
+if(PLASTIX_ENABLE_CUDA)
+    foreach(plastix_bench_cuda_tgt
+            plastix_benchmarks
+            bench_spmv_crossover
+            bench_phase_isolated
+            bench_resort_cost
+            bench_memory_footprint
+            bench_time_to_quality
+            bench_spmv_crossover_torch)
+        if(TARGET ${plastix_bench_cuda_tgt})
+            plastix_enable_cuda_on_target(${plastix_bench_cuda_tgt})
+        endif()
+    endforeach()
+endif()

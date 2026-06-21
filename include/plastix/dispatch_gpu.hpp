@@ -27,7 +27,6 @@
 
 namespace plastix {
 
-struct CompactEdge;
 struct ProposalTag;
 
 namespace gpu {

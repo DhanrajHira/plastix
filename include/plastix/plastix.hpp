@@ -61,16 +61,8 @@ using KahnScratchAllocator =
                         alloc::SOAField<FrontierTag, uint32_t>,
                         alloc::SOAField<NextFrontierTag, uint32_t>>;
 
-struct CompactEdge {
-  uint64_t Bits;
-
-  CompactEdge() : Bits(0) {}
-  CompactEdge(uint32_t From, uint32_t To)
-      : Bits(static_cast<uint64_t>(From) | (static_cast<uint64_t>(To) << 32)) {}
-
-  uint32_t From() const { return static_cast<uint32_t>(Bits); }
-  uint32_t To() const { return static_cast<uint32_t>(Bits >> 32); }
-};
+// CompactEdge lives in conn.hpp so it is complete by the time dispatch_gpu.hpp
+// (included above) references it.
 
 struct ProposalTag {};
 struct ProposalEntity {};

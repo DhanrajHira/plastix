@@ -15,7 +15,6 @@
 namespace plastix {
 
 struct LevelRange; // internal
-struct CompactEdge; // internal
 struct InDegreeTag;
 struct OutOffsetTag;
 struct KahnWritePosTag;

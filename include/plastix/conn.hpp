@@ -50,6 +50,21 @@ using MakeConnAllocatorFrom = typename MakeConnAllocatorFromList<FL>::type;
 // Convenience alias for the default case (includes Weight).
 using ConnStateAllocator = MakeConnAllocator<alloc::SOAField<WeightTag, float>>;
 
+// Packed (From, To) edge key used by the connection-proposal pipeline. Defined
+// here (rather than next to the Network) so the GPU dispatch layer
+// (dispatch_gpu.hpp) — which is included before the Network and takes
+// sizeof(CompactEdge) in a non-dependent context — sees a complete type.
+struct CompactEdge {
+  uint64_t Bits;
+
+  CompactEdge() : Bits(0) {}
+  CompactEdge(uint32_t From, uint32_t To)
+      : Bits(static_cast<uint64_t>(From) | (static_cast<uint64_t>(To) << 32)) {}
+
+  uint32_t From() const { return static_cast<uint32_t>(Bits); }
+  uint32_t To() const { return static_cast<uint32_t>(Bits >> 32); }
+};
+
 } // namespace plastix
 
 #endif // PLASTIX_CONN_HPP
