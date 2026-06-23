@@ -277,6 +277,11 @@ template <typename Global = EmptyGlobalState> struct DefaultNetworkTraits {
   static constexpr bool KernelizeUpdate = true;
   static constexpr bool KernelizePrune = true;
   static constexpr bool KernelizeAdd = true;
+  // Pipeline forward via per-unit reduction over a reverse-adjacency CSR
+  // instead of the per-edge atomicAdd sweep. Avoids atomic contention when a
+  // unit has many incoming edges (e.g. one output fed by N inputs); requires a
+  // float Accumulator. The Network maintains the CSR; rebuild on growth.
+  static constexpr bool ReverseAdjForward = false;
 };
 
 // ---------------------------------------------------------------------------

@@ -93,6 +93,30 @@ inline void DoForwardPipeline(UA &UnitAlloc, CA &ConnAlloc, Globals *G,
   PLASTIX_CUDA_CHECK(cudaDeviceSynchronize());
 }
 
+// Pipeline forward via per-unit reduction over a reverse-adjacency CSR.
+// Replaces the per-edge atomicAdd conn-sweep with a contention-free per-unit
+// tree reduction (one block per non-input unit), then the usual unit-apply.
+template <typename FP, typename UA, typename CA, typename Globals>
+inline void DoForwardReverseAdj(UA &UnitAlloc, CA &ConnAlloc, Globals *G,
+                                size_t NumInput, const std::uint32_t *Offsets,
+                                const std::uint32_t *Incoming) {
+  size_t NumUnits = UnitAlloc.Size();
+  if (NumUnits > NumInput) {
+    constexpr unsigned RedBlock = 256; // must match the kernel's __shared__ Sh
+    unsigned Grid = static_cast<unsigned>(NumUnits - NumInput);
+    cuda::ForwardPerUnitReduceKernel<FP><<<Grid, RedBlock>>>(
+        NumInput, NumUnits, Offsets, Incoming, UnitAlloc, ConnAlloc, G);
+    PLASTIX_CUDA_CHECK_KERNEL();
+    unsigned Block = cuda::DefaultBlockSize;
+    unsigned AGrid =
+        static_cast<unsigned>(cuda::GridSize(NumUnits - NumInput, Block));
+    cuda::ForwardUnitApplyKernel<FP>
+        <<<AGrid, Block>>>(NumInput, NumUnits, UnitAlloc, G);
+    PLASTIX_CUDA_CHECK_KERNEL();
+  }
+  PLASTIX_CUDA_CHECK(cudaDeviceSynchronize());
+}
+
 // ---------------------------------------------------------------------------
 // Backward pass — Topological propagation
 // ---------------------------------------------------------------------------

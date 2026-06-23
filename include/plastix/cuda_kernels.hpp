@@ -64,6 +64,44 @@ __global__ void ForwardUnitApplyKernel(size_t Begin, size_t End, UnitAlloc U,
   UAcc = Acc{};
 }
 
+// Pipeline forward via per-unit reduction over the reverse-adjacency CSR.
+// One block per non-input unit reduces that unit's incoming edges into its
+// ForwardAcc with a shared-memory tree reduction — no atomicAdd, so a
+// high-in-degree unit (e.g. one output fed by a million inputs) no longer
+// serializes on a single accumulator the way the per-edge atomic sweep does.
+// FP::Map must return the float Accumulator (Combine == +). Pair with the
+// existing ForwardUnitApplyKernel. Launch with blockDim.x == 256.
+template <typename FP, typename UnitAlloc, typename ConnAlloc, typename Globals>
+__global__ void
+ForwardPerUnitReduceKernel(size_t NumInput, size_t NumUnits,
+                           const std::uint32_t *Offsets,
+                           const std::uint32_t *Incoming, UnitAlloc U,
+                           ConnAlloc C, Globals *G) {
+  size_t Unit = NumInput + blockIdx.x;
+  if (Unit >= NumUnits)
+    return;
+  std::uint32_t Begin = Offsets[Unit];
+  std::uint32_t End = Offsets[Unit + 1];
+  float Acc = 0.0f;
+  for (std::uint32_t K = Begin + threadIdx.x; K < End; K += blockDim.x) {
+    std::uint32_t Ci = Incoming[K];
+    if (GetField<DeadTag>(C, Ci))
+      continue;
+    auto FromId = GetField<FromIdTag>(C, Ci);
+    Acc += FP::Map(U, Unit, FromId, C, Ci, *G);
+  }
+  __shared__ float Sh[256];
+  Sh[threadIdx.x] = Acc;
+  __syncthreads();
+  for (unsigned O = blockDim.x / 2; O > 0; O >>= 1) {
+    if (threadIdx.x < O)
+      Sh[threadIdx.x] += Sh[threadIdx.x + O];
+    __syncthreads();
+  }
+  if (threadIdx.x == 0)
+    GetForwardAcc(U, Unit) = Sh[0];
+}
+
 // ---------------------------------------------------------------------------
 // Forward pass — Topological propagation
 // ---------------------------------------------------------------------------

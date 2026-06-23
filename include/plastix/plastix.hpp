@@ -5,6 +5,7 @@
 #include "plastix/dispatch_cpu.hpp"
 #include "plastix/dispatch_gpu.hpp"
 #include "plastix/layers.hpp"
+#include "plastix/reverse_adjacency.hpp"
 #include "plastix/traits.hpp"
 #include "plastix/unit_state.hpp"
 #include <array>
@@ -114,6 +115,18 @@ public:
     OutputRange = Prev;
     if constexpr (Traits::Model == Propagation::Topological)
       SortConnectionsByLevel();
+    if constexpr (Traits::ReverseAdjForward) {
+#ifdef PLASTIX_HAS_CUDA
+      PLASTIX_CUDA_CHECK(cudaMallocManaged(
+          &RevOffsets, (UnitAlloc.GetCapacity() + 1) * sizeof(std::uint32_t)));
+      PLASTIX_CUDA_CHECK(cudaMallocManaged(
+          &RevIncoming, ConnAlloc.GetCapacity() * sizeof(std::uint32_t)));
+#else
+      RevOffsets = new std::uint32_t[UnitAlloc.GetCapacity() + 1];
+      RevIncoming = new std::uint32_t[ConnAlloc.GetCapacity()];
+#endif
+      RebuildReverseAdjacency();
+    }
   }
 
   Network(size_t InputDim, size_t OutputDim = 1)
@@ -127,6 +140,26 @@ public:
 #else
       ::operator delete(Globals);
 #endif
+    }
+    if constexpr (Traits::ReverseAdjForward) {
+#ifdef PLASTIX_HAS_CUDA
+      if (RevOffsets) PLASTIX_CUDA_CHECK(cudaFree(RevOffsets));
+      if (RevIncoming) PLASTIX_CUDA_CHECK(cudaFree(RevIncoming));
+#else
+      delete[] RevOffsets;
+      delete[] RevIncoming;
+#endif
+    }
+  }
+
+  // Rebuild the reverse-adjacency CSR (incoming edges grouped by destination
+  // unit) used by the per-unit forward. Call after any structural change; the
+  // ctor and DoAddConnections do this automatically when ReverseAdjForward.
+  void RebuildReverseAdjacency() {
+    if constexpr (Traits::ReverseAdjForward) {
+      std::uint32_t *WritePos = KahnAlloc.template GetArrayFor<InDegreeTag>();
+      BuildReverseAdjacency(ConnAlloc, UnitAlloc.Size(), RevOffsets,
+                            RevIncoming, WritePos);
     }
   }
 
@@ -156,7 +189,11 @@ public:
         cpu::DoForwardTopological<FP>(UnitAlloc, ConnAlloc, Globals, NumInput,
                                       Ranges, NumLevels);
     } else {
-      if constexpr (HasCuda && std::is_same_v<Acc, float>)
+      if constexpr (HasCuda && std::is_same_v<Acc, float> &&
+                    Traits::ReverseAdjForward)
+        gpu::DoForwardReverseAdj<FP>(UnitAlloc, ConnAlloc, Globals, NumInput,
+                                     RevOffsets, RevIncoming);
+      else if constexpr (HasCuda && std::is_same_v<Acc, float>)
         gpu::DoForwardPipeline<FP>(UnitAlloc, ConnAlloc, Globals, NumInput);
       else
         cpu::DoForwardPipeline<FP>(UnitAlloc, ConnAlloc, Globals, NumInput);
@@ -308,8 +345,11 @@ public:
       else
         Committed = cpu::DoAddConnections<AC>(UnitAlloc, ConnAlloc, KahnAlloc,
                                               ProposalAlloc, Globals, N);
-      if (Committed)
+      if (Committed) {
         NeedsResort = true;
+        if constexpr (Traits::ReverseAdjForward)
+          RebuildReverseAdjacency(); // keep the CSR current after growth
+      }
     }
   }
 
@@ -404,6 +444,10 @@ private:
   size_t UnitsAddedLastStep = 0;
   KahnScratchAllocator KahnAlloc;
   ProposalScratchAllocator ProposalAlloc;
+  // Reverse-adjacency CSR (managed) for the per-unit forward; allocated only
+  // when Traits::ReverseAdjForward.
+  std::uint32_t *RevOffsets = nullptr;
+  std::uint32_t *RevIncoming = nullptr;
 };
 
 } // namespace plastix
