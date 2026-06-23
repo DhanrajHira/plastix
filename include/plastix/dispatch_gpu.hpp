@@ -417,6 +417,10 @@ inline void DoForwardTopological(UA &, CA &, Globals *, size_t,
 template <typename FP, typename UA, typename CA, typename Globals>
 inline void DoForwardPipeline(UA &, CA &, Globals *, size_t) {}
 
+template <typename FP, typename UA, typename CA, typename Globals>
+inline void DoForwardReverseAdj(UA &, CA &, Globals *, size_t,
+                                const std::uint32_t *, const std::uint32_t *) {}
+
 template <typename BP, typename UA, typename CA, typename Globals,
           typename RangesT>
 inline void DoBackwardTopological(UA &, CA &, Globals *, size_t,
