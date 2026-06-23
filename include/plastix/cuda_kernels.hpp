@@ -12,6 +12,7 @@
 #include "plastix/alloc.hpp"
 #include "plastix/conn.hpp"
 #include "plastix/cuda_primitives.hpp"
+#include "plastix/device_atomics.hpp"
 #include "plastix/macros.hpp"
 #include "plastix/unit_state.hpp"
 
@@ -48,7 +49,9 @@ __global__ void ForwardConnSweepKernel(size_t NumConns, UnitAlloc U,
   auto ToId = GetField<ToIdTag>(C, I);
   auto FromId = GetField<FromIdTag>(C, I);
   float V = FP::Map(U, ToId, FromId, C, I, *G);
-  atomicAdd(&GetForwardAcc(U, ToId), V);
+  // Warp-aggregate by destination: lanes feeding the same unit collapse to one
+  // atomic, so a high-in-degree unit no longer serializes the scatter.
+  WarpAtomicAddKeyed(GetForwardAcc(U, ToId), V, ToId);
 }
 
 template <typename FP, typename UnitAlloc, typename Globals>
@@ -125,7 +128,7 @@ __global__ void ForwardConnSweepLevelKernel(uint32_t Begin, uint32_t End,
   auto ToId = GetField<ToIdTag>(C, I);
   auto FromId = GetField<FromIdTag>(C, I);
   float V = FP::Map(U, ToId, FromId, C, I, *G);
-  atomicAdd(&GetForwardAcc(U, ToId), V);
+  WarpAtomicAddKeyed(GetForwardAcc(U, ToId), V, ToId);
 }
 
 template <typename FP, typename UnitAlloc, typename Globals>
