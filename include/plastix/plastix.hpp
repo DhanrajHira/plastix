@@ -280,10 +280,12 @@ public:
       return;
     else {
       using AP = typename Traits::AddUnit;
+      const size_t Before = UnitAlloc.Size();
       if constexpr (HasCuda && Traits::KernelizeAdd)
         gpu::DoAddUnits<AP>(UnitAlloc, Globals, MaxLevels);
       else
         cpu::DoAddUnits<AP>(UnitAlloc, Globals, MaxLevels);
+      UnitsAddedLastStep = UnitAlloc.Size() - Before;
     }
   }
   void DoAddConnections() {
@@ -292,6 +294,13 @@ public:
     else {
       using AC = typename Traits::AddConn;
       constexpr uint16_t N = Traits::Neighbourhood;
+      // Early-out: new connections are only ever proposed to wire units added
+      // this step (a freshly generated unit's incoming/outgoing edges). When
+      // DoAddUnits added nothing, the O(N^2) proposal sweep has no candidates,
+      // so skip it. Assumes connection growth follows unit growth — networks
+      // that densify pre-existing units independently must not rely on this.
+      if (UnitsAddedLastStep == 0)
+        return;
       bool Committed;
       if constexpr (HasCuda && Traits::KernelizeAdd)
         Committed = gpu::DoAddConnections<AC>(UnitAlloc, ConnAlloc,
@@ -390,6 +399,9 @@ private:
   std::array<LevelRange, MaxLevels> Ranges{};
   uint16_t NumLevels = 0;
   bool NeedsResort = false;
+  // Units added by the most recent DoAddUnits(); gates the add-connection
+  // proposal sweep (see DoAddConnections).
+  size_t UnitsAddedLastStep = 0;
   KahnScratchAllocator KahnAlloc;
   ProposalScratchAllocator ProposalAlloc;
 };
