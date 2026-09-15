@@ -28,7 +28,7 @@ tests/                     GoogleTest (fetched via FetchContent). Split by area:
   test_soa.cpp             soa.hpp X-macro tests
 benchmarks/                Google Benchmark stubs (FetchContent)
 examples/                  Runnable algorithm demos, one subdir each (see below)
-agents/                    Skills/recipes for AI agents (see agents/README.md)
+.agents/                   Skills/recipes for AI agents (see .agents/README.md)
 .clang-format              LLVM-based style with customizations — obey it
 ```
 
@@ -206,4 +206,4 @@ If you change the framework's stage ordering, add a new policy category, rename 
 
 ## Agent skills
 
-See `agents/` for reusable recipes covering common tasks in this repo (adding an example, extending SOA fields, defining custom traits, running the tooling). Those files are the place to add more procedural knowledge as patterns stabilize.
+See `.agents/` for reusable recipes covering common tasks in this repo (adding an example, extending SOA fields, defining custom traits, running the tooling). Those files are the place to add more procedural knowledge as patterns stabilize.
