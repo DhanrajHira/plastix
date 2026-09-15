@@ -4,6 +4,8 @@
 #include "plastix/alloc.hpp"
 #include "plastix/macros.hpp"
 
+#include <cstdint>
+
 namespace plastix {
 
 struct ConnectionState {};
@@ -22,6 +24,21 @@ struct WeightTag {};
 PLASTIX_HD constexpr auto &GetWeight(auto &Alloc, size_t Id) {
   return GetField<WeightTag>(Alloc, Id);
 }
+
+// Packs a (From, To) connection-id pair into 64 bits. Used by the device
+// AddConnections proposal pipeline, which sorts/dedups the packed keys as raw
+// uint64_t. Defined here (rather than in plastix.hpp) so the dispatch headers
+// that static_assert on sizeof(CompactEdge) see the complete type.
+struct CompactEdge {
+  uint64_t Bits;
+
+  PLASTIX_HD CompactEdge() : Bits(0) {}
+  PLASTIX_HD CompactEdge(uint32_t From, uint32_t To)
+      : Bits(static_cast<uint64_t>(From) | (static_cast<uint64_t>(To) << 32)) {}
+
+  PLASTIX_HD uint32_t From() const { return static_cast<uint32_t>(Bits); }
+  PLASTIX_HD uint32_t To() const { return static_cast<uint32_t>(Bits >> 32); }
+};
 
 // Type list for user-defined extra connection fields.
 template <typename... Fields> struct ConnFieldList {};
