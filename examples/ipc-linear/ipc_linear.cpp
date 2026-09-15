@@ -1,5 +1,5 @@
 // ===========================================================================
-// Streaming iPC — 1-Layer Linear Debug Example
+// Streaming iPC -- 1-Layer Linear Debug Example
 // ===========================================================================
 //
 // This example implements the simplest possible case of Streaming incremental
@@ -36,7 +36,7 @@
 // ---------------------------------------------------------------------------
 //
 // Two extra per-unit SOA fields (ValueNodeTag, ErrorTag) are added via
-// ExtraUnitFields in the traits — no framework source changes needed.
+// ExtraUnitFields in the traits -- no framework source changes needed.
 //
 // Each observation maps to:
 //
@@ -119,7 +119,7 @@ struct iPCUpdateConn {
 };
 
 // ---------------------------------------------------------------------------
-// Traits — 1-layer, no backward pass, no hidden value-node updates
+// Traits -- 1-layer, no backward pass, no hidden value-node updates
 // ---------------------------------------------------------------------------
 
 struct iPCLinearTraits : plastix::DefaultNetworkTraits<> {
@@ -165,10 +165,10 @@ int main() {
       plastix::GetField<ValueNodeTag>(U, I) = Input[I];
     plastix::GetField<ValueNodeTag>(U, OutputBegin) = Y;
 
-    // Forward pass — computes eps = ValueNode - mu, stores in ErrorTag.
+    // Forward pass -- computes eps = ValueNode - mu, stores in ErrorTag.
     Net.DoForwardPass(Input);
 
-    // Weight update — theta += alpha * eps * f(x_src).
+    // Weight update -- theta += alpha * eps * f(x_src).
     Net.DoUpdateConnectionState();
 
     // mu = ValueNode - eps (reconstruct prediction from error).

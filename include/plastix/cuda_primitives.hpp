@@ -55,7 +55,7 @@ PLASTIX_HOST void ExclusiveScanInPlace(T *Data, size_t N) {
 }
 
 // ---------------------------------------------------------------------------
-// Test helpers — exercise the launch + atomicAdd<float> path so unit tests
+// Test helpers -- exercise the launch + atomicAdd<float> path so unit tests
 // can verify the toolchain links and runs.
 // ---------------------------------------------------------------------------
 
@@ -86,7 +86,7 @@ PLASTIX_HOST void AddOnesIntoSlot(float *Slot, size_t N) {
 // ---------------------------------------------------------------------------
 //
 // 64 passes, one per bit. Each pass partitions keys into a "0-bit" half
-// followed by a "1-bit" half, preserving relative order — a stable parallel
+// followed by a "1-bit" half, preserving relative order -- a stable parallel
 // partition built on top of a single exclusive scan.
 //
 // Why 1-bit and not 8-bit byte radix: a byte-radix scatter via atomicAdd is

@@ -154,7 +154,7 @@ TEST(PassTest, ForwardPassCustomPolicy) {
 }
 
 TEST(PassTest, ForwardPassManyConnections) {
-  // 10 inputs (each=1.0), 1 output — 10 individual connections
+  // 10 inputs (each=1.0), 1 output -- 10 individual connections
   // Output = sum of 10 * 1.0 = 10.0
   TestNetwork Net(10, FC{1});
   std::array<float, 10> In;
@@ -167,7 +167,7 @@ TEST(PassTest, ForwardPassManyConnections) {
 }
 
 TEST(PassTest, ConsecutiveForwardPasses) {
-  // Two forward passes with different inputs — second overwrites first.
+  // Two forward passes with different inputs -- second overwrites first.
   TestNetwork Net(2, FC{1});
 
   // First pass: output = 1+2 = 3
@@ -209,7 +209,7 @@ TEST(PassTest, BackwardPassBasic) {
   EXPECT_EQ(Net.GetStep(), 1u);
 
   Net.DoBackwardPass();
-  // Step unchanged — backward doesn't increment.
+  // Step unchanged -- backward doesn't increment.
   EXPECT_EQ(Net.GetStep(), 1u);
 
   auto &UA = Net.GetUnitAlloc();
@@ -522,7 +522,7 @@ TEST(PruneTest, PruneUnitMarksSourceConnectionsDead) {
 }
 
 // Policy that prunes the output unit (last unit).
-// TargetId is a host static — keeps the kernel path off via KernelizePrune.
+// TargetId is a host static -- keeps the kernel path off via KernelizePrune.
 struct PruneDestUnit {
   static size_t TargetId;
   static bool ShouldPrune(auto &, size_t Id, auto &) { return Id == TargetId; }
@@ -578,8 +578,8 @@ TEST(PruneTest, PruneConnMarksPartialDead) {
   plastix::Network<PruneConnTraits> Net(2, 1);
 
   auto &CA = Net.GetConnAlloc();
-  CA.Get<plastix::WeightTag>(0) = 0.1f; // below threshold — pruned
-  CA.Get<plastix::WeightTag>(1) = 1.0f; // above threshold — survives
+  CA.Get<plastix::WeightTag>(0) = 0.1f; // below threshold -- pruned
+  CA.Get<plastix::WeightTag>(1) = 1.0f; // above threshold -- survives
 
   Net.DoPruneConnections();
   EXPECT_EQ(CA.Size(), 2u);
@@ -622,7 +622,7 @@ struct AddUnitTraits : plastix::DefaultNetworkTraits<> {
 };
 
 TEST(AddUnitTest, NoopDoesNotAddUnits) {
-  // Default traits have NoAddUnit — DoAddUnits is a no-op.
+  // Default traits have NoAddUnit -- DoAddUnits is a no-op.
   TestNetwork Net(2, 1);
   EXPECT_EQ(Net.GetUnitAlloc().Size(), 3u);
   Net.DoAddUnits();
@@ -812,7 +812,7 @@ struct AddOutgoingTraits : plastix::DefaultNetworkTraits<> {
   using AddConn = AddOneOutgoing;
 };
 
-// Policy that adds via both methods: incoming 1→0, outgoing 2→0.
+// Policy that adds via both methods: incoming 1->0, outgoing 2->0.
 struct AddBothDirections {
   PLASTIX_HD static bool ShouldAddIncomingConnection(auto &, size_t Self, size_t Candidate,
                                           auto &) {
@@ -824,7 +824,7 @@ struct AddBothDirections {
   }
   PLASTIX_HD static void InitConnection(auto &, size_t SrcId, size_t, auto &C,
                              size_t ConnId, auto &) {
-    // Incoming 1→0 gets 0.3, outgoing 2→0 gets 0.7. Distinguish by SrcId.
+    // Incoming 1->0 gets 0.3, outgoing 2->0 gets 0.7. Distinguish by SrcId.
     C.template Get<plastix::WeightTag>(ConnId) = (SrcId == 1) ? 0.3f : 0.7f;
   }
 };
@@ -873,7 +873,7 @@ TEST(AddConnTest, AddsOutgoingConnection) {
 }
 
 TEST(AddConnTest, BothIncomingAndOutgoing) {
-  // Policy adds two connections: incoming 1→0 (0.3), outgoing 2→0 (0.7).
+  // Policy adds two connections: incoming 1->0 (0.3), outgoing 2->0 (0.7).
   plastix::Network<AddBothTraits> Net(2, 1);
   Net.DoAddConnections();
 
@@ -896,7 +896,7 @@ TEST(AddConnTest, BothIncomingAndOutgoing) {
 }
 
 TEST(AddConnTest, CalledTwiceAddsAgain) {
-  // Policy fires every call — no dedup, so two calls = two connections.
+  // Policy fires every call -- no dedup, so two calls = two connections.
   plastix::Network<AddIncomingTraits> Net(2, 1);
   Net.DoAddConnections();
   EXPECT_EQ(Net.GetConnAlloc().Size(), 3u);
@@ -904,7 +904,7 @@ TEST(AddConnTest, CalledTwiceAddsAgain) {
   EXPECT_EQ(Net.GetConnAlloc().Size(), 4u);
 }
 
-// Policy that adds a connection 0→2 with weight 0.5 (targets the output unit).
+// Policy that adds a connection 0->2 with weight 0.5 (targets the output unit).
 struct AddConnToOutput {
   PLASTIX_HD static bool ShouldAddIncomingConnection(auto &, size_t Self, size_t Candidate,
                                           auto &) {
@@ -924,14 +924,14 @@ struct AddConnToOutputTraits : plastix::DefaultNetworkTraits<> {
 };
 
 TEST(AddConnTest, NewConnectionParticipatesInForwardPass) {
-  // 2 inputs (0,1), 1 output (2). Initial: 0→2 (w=1), 1→2 (w=1).
+  // 2 inputs (0,1), 1 output (2). Initial: 0->2 (w=1), 1->2 (w=1).
   // inputs={2, 3} => output = 1*2 + 1*3 = 5.
   plastix::Network<AddConnToOutputTraits> Net(2, FC{1});
   std::array<float, 2> In = {2.0f, 3.0f};
   Net.DoForwardPass(In);
   EXPECT_FLOAT_EQ(Net.GetOutput()[0], 5.0f);
 
-  // Add connection 0→2 with weight 0.5.
+  // Add connection 0->2 with weight 0.5.
   Net.DoAddConnections();
 
   // Now output = 1*2 + 1*3 + 0.5*2 = 6.
@@ -998,7 +998,7 @@ TEST(LevelTest, AddConnectionTriggersResort) {
   Net.DoForwardPass(In);
   EXPECT_FLOAT_EQ(Net.GetOutput()[0], 5.0f);
 
-  Net.DoAddConnections(); // adds 0→2 with w=0.5
+  Net.DoAddConnections(); // adds 0->2 with w=0.5
   Net.DoForwardPass(In);  // should re-sort and include new connection
   EXPECT_FLOAT_EQ(Net.GetOutput()[0], 6.0f);
 }
@@ -1046,7 +1046,7 @@ struct LargeNeighbourhoodTraits : plastix::DefaultNetworkTraits<> {
 };
 
 TEST(NeighbourhoodTest, LargeNeighbourhoodAllowsAllPairs) {
-  // Same behavior as unlimited — no filtering.
+  // Same behavior as unlimited -- no filtering.
   plastix::Network<LargeNeighbourhoodTraits> Net(2, FC{1});
   std::array<float, 2> In = {2.0f, 3.0f};
   Net.DoForwardPass(In);
@@ -1090,10 +1090,10 @@ TEST(NeighbourhoodTest, NeighbourhoodFiltersDistantLevels) {
 // Deduplication tests
 // ---------------------------------------------------------------------------
 
-// Policy that proposes 1→0 via both incoming AND outgoing paths.
+// Policy that proposes 1->0 via both incoming AND outgoing paths.
 // Incoming: unit 0 accepts from unit 1 => (From=1, To=0).
 // Outgoing: unit 1 sends to unit 0 => (From=1, To=0).
-// Same edge proposed twice — should be deduplicated to one connection.
+// Same edge proposed twice -- should be deduplicated to one connection.
 struct AddDuplicateEdge {
   PLASTIX_HD static bool ShouldAddIncomingConnection(auto &, size_t Self, size_t Candidate,
                                           auto &) {
@@ -1114,7 +1114,7 @@ struct DedupTraits : plastix::DefaultNetworkTraits<> {
 };
 
 TEST(DeduplicationTest, DuplicateProposalsDeduped) {
-  // 2 inputs (0,1) + 1 output (2). Both incoming and outgoing propose 1→0.
+  // 2 inputs (0,1) + 1 output (2). Both incoming and outgoing propose 1->0.
   plastix::Network<DedupTraits> Net(2, 1);
   EXPECT_EQ(Net.GetConnAlloc().Size(), 2u);
 
@@ -1123,7 +1123,7 @@ TEST(DeduplicationTest, DuplicateProposalsDeduped) {
   // Should add exactly 1 connection (the duplicate is removed).
   EXPECT_EQ(Net.GetConnAlloc().Size(), 3u);
 
-  // Verify the new connection is 1→0.
+  // Verify the new connection is 1->0.
   auto &CA = Net.GetConnAlloc();
   EXPECT_EQ(CA.Get<plastix::FromIdTag>(2), 1u);
   EXPECT_EQ(CA.Get<plastix::ToIdTag>(2), 0u);

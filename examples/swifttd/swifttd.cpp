@@ -1,22 +1,22 @@
-// SwiftTD reinforcement-learning algorithm — Plastix port.
+// SwiftTD reinforcement-learning algorithm -- Plastix port.
 //
-// SwiftTD is TD(λ) with per-feature meta-learned step sizes (beta = log(alpha)
+// SwiftTD is TD(lambda) with per-feature meta-learned step sizes (beta = log(alpha)
 // updated via the IDBD/Auto-step style trick), an effective step-size cap
 // (eta), and auxiliary traces h, h_old, h_temp, z_bar, p.
 //
-// We model SwiftTD as a single linear layer in Plastix (N feature units →
+// We model SwiftTD as a single linear layer in Plastix (N feature units ->
 // 1 value unit). All per-feature state (w, z, z_delta, delta_w, h, h_old,
 // h_temp, beta, z_bar, p) lives on the connection. The original step is
 // split across the Loss / UpdateConn hooks:
 //
-//   Forward                = compute v = Σ w_i f_i, stash in Globals.V
-//   Loss (CalculateLoss)   = compute δ, snapshot v_delta_prev, reset Tau/B
-//   UpdateIncomingConn[i]  = SwiftTD "phase 1" — w/beta/h updates + decay,
+//   Forward                = compute v = sum w_i f_i, stash in Globals.V
+//   Loss (CalculateLoss)   = compute delta, snapshot v_delta_prev, reset Tau/B
+//   UpdateIncomingConn[i]  = SwiftTD "phase 1" -- w/beta/h updates + decay,
 //                             plus reductions Tau, B over the new beta and
 //                             the decayed z (which phase 2 needs).
-//   UpdateOutgoingConn[i]  = SwiftTD "phase 2" — refresh z, p, z_bar, h_temp
+//   UpdateOutgoingConn[i]  = SwiftTD "phase 2" -- refresh z, p, z_bar, h_temp
 //                             using Tau and B, accumulate v_delta.
-//   ResetGlobal            = v_old ← v
+//   ResetGlobal            = v_old <- v
 
 #include <plastix/plastix.hpp>
 
@@ -57,8 +57,8 @@ struct SwiftTDGlobals {
   float Delta = 0.0f;
   float VDeltaPrev = 0.0f; // v_delta from previous step (used in phase 1)
   float VDelta = 0.0f;     // v_delta accumulated in phase 2
-  float Tau = 0.0f;        // Σ exp(beta_i) * f_i^2 (computed in phase 1)
-  float B = 0.0f;          // Σ z_i * f_i           (computed in phase 1)
+  float Tau = 0.0f;        // sum exp(beta_i) * f_i^2 (computed in phase 1)
+  float B = 0.0f;          // sum z_i * f_i           (computed in phase 1)
 };
 
 // --- ConnInit functor: only beta needs an initial value; placement-new
@@ -70,7 +70,7 @@ struct SwiftTDConnInit {
   }
 };
 
-// --- forward: v = Σ w_i f_i; expose v through Globals so Loss can read it.
+// --- forward: v = sum w_i f_i; expose v through Globals so Loss can read it.
 struct SwiftTDForward {
   using Accumulator = float;
   PLASTIX_HD static float Map(auto &U, size_t, size_t SrcId, auto &C,
@@ -85,7 +85,7 @@ struct SwiftTDForward {
 };
 
 // --- Loss runs after forward / before UpdateConn. We hijack it to compute
-// δ from (reward, v, v_old) and to reset the per-step reductions.
+// delta from (reward, v, v_old) and to reset the per-step reductions.
 // Targets[0] is interpreted as the reward observed at this step.
 struct SwiftTDLoss {
   static void CalculateLoss(auto &, plastix::UnitRange,
@@ -195,7 +195,7 @@ struct SwiftTDTraits : plastix::DefaultNetworkTraits<SwiftTDGlobals> {
   using Loss = SwiftTDLoss;
   using UpdateConn = SwiftTDUpdate;
   using ResetGlobal = SwiftTDResetGlobal;
-  // SwiftTDUpdate writes `G.Tau += ...` and `G.B += ...` from every thread —
+  // SwiftTDUpdate writes `G.Tau += ...` and `G.B += ...` from every thread --
   // an unsafe reduction under parallel execution. Keep this on the host.
   static constexpr bool KernelizeUpdate = false;
 
@@ -217,14 +217,14 @@ using ImprintingLearner = plastix::Network<SwiftTDTraits>;
 } // namespace
 
 // ---------------------------------------------------------------------------
-// Episodic 5-state random walk (Sutton & Barto §6.2). States 1..5 are
+// Episodic 5-state random walk (Sutton & Barto sec 6.2). States 1..5 are
 // non-terminal, with absorbing terminals on either side. The right terminal
 // pays reward 1; everything else is 0. Features are one-hot for the current
-// non-terminal state and the all-zeros vector for the terminal. Under γ=1
+// non-terminal state and the all-zeros vector for the terminal. Under gamma=1
 // the true value function is V*(s_i) = i / 6.
 //
 // At the start of each episode we seed v_old by running a forward pass and
-// triggering ResetGlobalState — that bypasses the spurious δ that would
+// triggering ResetGlobalState -- that bypasses the spurious delta that would
 // otherwise be computed against the previous episode's terminal v_old=0.
 // ---------------------------------------------------------------------------
 int main() {

@@ -9,7 +9,7 @@ namespace plastix {
 struct ConnectionState {};
 using ConnStateId = alloc::AllocId<ConnectionState>;
 
-// Core tags — always present in every connection allocator.
+// Core tags -- always present in every connection allocator.
 struct FromIdTag {};
 struct ToIdTag {};
 struct DeadTag {};

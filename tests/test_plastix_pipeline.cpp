@@ -174,7 +174,7 @@ TEST(PipelinePassTest, ForwardPassCustomPolicy) {
 }
 
 TEST(PipelinePassTest, ForwardPassManyConnections) {
-  // 10 inputs (each=1.0), 1 output — 10 individual connections
+  // 10 inputs (each=1.0), 1 output -- 10 individual connections
   // Output = sum of 10 * 1.0 = 10.0
   TestNetwork Net(10, FC{1});
   std::array<float, 10> In;
@@ -537,7 +537,7 @@ TEST(PipelinePruneTest, PruneUnitMarksSourceConnectionsDead) {
   }
 }
 
-// TargetId is a host static — opt out of the kernel path via KernelizePrune.
+// TargetId is a host static -- opt out of the kernel path via KernelizePrune.
 struct PruneDestUnit {
   static size_t TargetId;
   static bool ShouldPrune(auto &, size_t Id, auto &) { return Id == TargetId; }

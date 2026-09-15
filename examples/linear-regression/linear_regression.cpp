@@ -7,7 +7,7 @@
 constexpr float LearningRate = 0.01f;
 constexpr size_t NumInputs = 3;
 
-// Identity activation — pure linear output.
+// Identity activation -- pure linear output.
 struct LinearForwardPass {
   using Accumulator = float;
 

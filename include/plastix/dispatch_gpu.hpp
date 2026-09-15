@@ -1,14 +1,14 @@
 #ifndef PLASTIX_DISPATCH_GPU_HPP
 #define PLASTIX_DISPATCH_GPU_HPP
 
-// GPU launchers — one free template per phase, mirroring the host paths
+// GPU launchers -- one free template per phase, mirroring the host paths
 // in `dispatch_cpu.hpp`. The function declarations are visible in every
 // build so the qualified-name lookup in `if constexpr` branches at the
 // dispatch site succeeds; the bodies are guarded by PLASTIX_HAS_CUDA so
 // the `<<<>>>` launch syntax and `cuda::` references only have to exist
 // when nvcc is doing the parse.
 //
-// In host builds the bodies are empty stubs — they are never instantiated
+// In host builds the bodies are empty stubs -- they are never instantiated
 // (the dispatch site discards them with `if constexpr (HasCuda && ...)`),
 // so no codegen happens and the unused parameters produce no warnings.
 
@@ -35,7 +35,7 @@ namespace gpu {
 #ifdef PLASTIX_HAS_CUDA
 
 // ---------------------------------------------------------------------------
-// Forward pass — Topological propagation
+// Forward pass -- Topological propagation
 // ---------------------------------------------------------------------------
 
 template <typename FP, typename UA, typename CA, typename Globals,
@@ -68,7 +68,7 @@ inline void DoForwardTopological(UA &UnitAlloc, CA &ConnAlloc, Globals *G,
 }
 
 // ---------------------------------------------------------------------------
-// Forward pass — Pipeline propagation
+// Forward pass -- Pipeline propagation
 // ---------------------------------------------------------------------------
 
 template <typename FP, typename UA, typename CA, typename Globals>
@@ -95,7 +95,7 @@ inline void DoForwardPipeline(UA &UnitAlloc, CA &ConnAlloc, Globals *G,
 }
 
 // ---------------------------------------------------------------------------
-// Backward pass — Topological propagation
+// Backward pass -- Topological propagation
 // ---------------------------------------------------------------------------
 
 template <typename BP, typename UA, typename CA, typename Globals,
@@ -128,7 +128,7 @@ inline void DoBackwardTopological(UA &UnitAlloc, CA &ConnAlloc, Globals *G,
 }
 
 // ---------------------------------------------------------------------------
-// Backward pass — Pipeline propagation
+// Backward pass -- Pipeline propagation
 // ---------------------------------------------------------------------------
 
 template <typename BP, typename UA, typename CA, typename Globals>
@@ -234,7 +234,7 @@ inline void DoAddUnits(UA &UnitAlloc, Globals *G, uint16_t MaxLvl) {
 
 // AddConnections runs the entire 3-phase proposal pipeline on device:
 // Phase 1 (per-(U,V) collection), Phase 2 (radix sort of packed keys),
-// Phase 3 (dedup-flag → exclusive scan → AllocateMany → commit). Returns
+// Phase 3 (dedup-flag -> exclusive scan -> AllocateMany -> commit). Returns
 // true if any new connections were committed (caller flips NeedsResort).
 template <typename AC, typename UA, typename CA, typename PA, typename Globals>
 inline bool DoAddConnections(UA &UnitAlloc, CA &ConnAlloc, PA &ProposalAlloc,
@@ -300,7 +300,7 @@ inline bool DoAddConnections(UA &UnitAlloc, CA &ConnAlloc, PA &ProposalAlloc,
 }
 
 // ---------------------------------------------------------------------------
-// Topology rebuild — level-parallel Kahn's algorithm on device
+// Topology rebuild -- level-parallel Kahn's algorithm on device
 // ---------------------------------------------------------------------------
 
 template <typename UA, typename CA, typename KA>

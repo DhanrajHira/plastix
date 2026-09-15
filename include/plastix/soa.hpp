@@ -1,23 +1,4 @@
-// No include guards — designed for multiple inclusion (one per pass).
-//
-// This file is an X-macro code generator. It is included three times (by
-// unit_state.hpp, or any file that defines SOA types) with a different
-// PLASTIX_SOA_MODE_* macro set each time. Each inclusion expands the same
-// .inc field list into a different set of declarations:
-//
-//   PLASTIX_SOA_MODE_TAGS  → forward-declares the entity struct and all field
-//                            tag types (e.g. struct ActivationATag {}).
-//
-//   PLASTIX_SOA_MODE_ALLOC → emits a SOAAllocator typedef that bundles all
-//                            declared fields (e.g. UnitStateAllocator).
-//
-//   PLASTIX_SOA_MODE_HANDLE → emits a Handle struct with typed Get* accessors
-//                             for each field, wrapping a raw AllocId.
-//
-// Adding a new SOA type:
-//   1. Create a MyType.inc file with SOA_TYPE / FIELD / SOA_END macros.
-//   2. Include soa.hpp three times with the three mode guards, just as
-//      unit_state.hpp does for unit_state.inc.
+// No include guards -- designed for multiple inclusion (one per pass).
 #include "plastix/alloc.hpp"
 
 #undef SOA_TYPE

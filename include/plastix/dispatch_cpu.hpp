@@ -36,7 +36,7 @@ struct ProposalTag;
 namespace cpu {
 
 // ---------------------------------------------------------------------------
-// Forward pass — Topological propagation
+// Forward pass -- Topological propagation
 // ---------------------------------------------------------------------------
 //
 // Walks one level at a time: accumulate across every connection in level L
@@ -73,7 +73,7 @@ inline void DoForwardTopological(UA &UnitAlloc, CA &ConnAlloc, Globals *G,
 }
 
 // ---------------------------------------------------------------------------
-// Forward pass — Pipeline propagation
+// Forward pass -- Pipeline propagation
 // ---------------------------------------------------------------------------
 //
 // One sweep over every live connection (no level partitioning), then one
@@ -103,7 +103,7 @@ inline void DoForwardPipeline(UA &UnitAlloc, CA &ConnAlloc, Globals *G,
 }
 
 // ---------------------------------------------------------------------------
-// Backward pass — Topological propagation
+// Backward pass -- Topological propagation
 // ---------------------------------------------------------------------------
 //
 // Walks levels high-to-low; gradients flow backward, so `Apply` runs on the
@@ -138,7 +138,7 @@ inline void DoBackwardTopological(UA &UnitAlloc, CA &ConnAlloc, Globals *G,
 }
 
 // ---------------------------------------------------------------------------
-// Backward pass — Pipeline propagation
+// Backward pass -- Pipeline propagation
 // ---------------------------------------------------------------------------
 
 template <typename BP, typename UA, typename CA, typename Globals>
@@ -345,7 +345,7 @@ inline bool DoAddConnections(UA &UnitAlloc, CA &ConnAlloc, KA &KahnAlloc,
   if (NumProposals == 0)
     return false;
 
-  // Phase 2: sort packed (From, To) bits ascending. Pure host sort —
+  // Phase 2: sort packed (From, To) bits ascending. Pure host sort --
   // KernelizeAdd=true callers go through the GPU dispatcher instead.
   std::sort(Props, Props + NumProposals,
             [](const auto &A, const auto &B) { return A.Bits < B.Bits; });

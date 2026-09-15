@@ -74,8 +74,8 @@ struct ImprintingLearnerGlobals {
   float Delta = 0.0f;
   float VDeltaPrev = 0.0f; // v_delta from previous step (used in phase 1)
   float VDelta = 0.0f;     // v_delta accumulated in phase 2
-  float Tau = 0.0f;        // Σ exp(beta_i) * f_i^2 (computed in phase 1)
-  float B = 0.0f;          // Σ z_i * f_i           (computed in phase 1)
+  float Tau = 0.0f;        // sum exp(beta_i) * f_i^2 (computed in phase 1)
+  float B = 0.0f;          // sum z_i * f_i           (computed in phase 1)
                            //
   int GenerationLeft = hp::MaxGenerationsPerStep;
   bool WasActive = false;
@@ -95,7 +95,7 @@ struct ImprintingLearnerConnInit {
   }
 };
 
-// --- forward: v = Σ w_i f_i; expose v through Globals so Loss can read it.
+// --- forward: v = sum w_i f_i; expose v through Globals so Loss can read it.
 struct ImprintingLearnerForward {
   struct Acc {
     float Activation = 0;
@@ -155,7 +155,7 @@ struct ImprintingLearnerForward {
 };
 
 // --- Loss runs after forward / before UpdateConn. We hijack it to compute
-// δ from (reward, v, v_old) and to reset the per-step reductions.
+// delta from (reward, v, v_old) and to reset the per-step reductions.
 // Targets[0] is interpreted as the reward observed at this step.
 struct ImprintingLearnerLoss {
   static void CalculateLoss(auto &, plastix::UnitRange,
@@ -432,14 +432,14 @@ using ImprintingLearner = plastix::Network<ImprintingLearnerTraits>;
 } // namespace
 
 // ---------------------------------------------------------------------------
-// Episodic 5-state random walk (Sutton & Barto §6.2). States 1..5 are
+// Episodic 5-state random walk (Sutton & Barto sec 6.2). States 1..5 are
 // non-terminal, with absorbing terminals on either side. The right terminal
 // pays reward 1; everything else is 0. Features are one-hot for the current
-// non-terminal state and the all-zeros vector for the terminal. Under γ=1
+// non-terminal state and the all-zeros vector for the terminal. Under gamma=1
 // the true value function is V*(s_i) = i / 6.
 //
 // At the start of each episode we seed v_old by running a forward pass and
-// triggering ResetGlobalState — that bypasses the spurious δ that would
+// triggering ResetGlobalState -- that bypasses the spurious delta that would
 // otherwise be computed against the previous episode's terminal v_old=0.
 // ---------------------------------------------------------------------------
 int main() {

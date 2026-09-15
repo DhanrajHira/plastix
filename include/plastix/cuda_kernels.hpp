@@ -23,13 +23,13 @@ namespace plastix {
 namespace cuda {
 
 // ---------------------------------------------------------------------------
-// Forward pass — Pipeline propagation
+// Forward pass -- Pipeline propagation
 // ---------------------------------------------------------------------------
 //
 // Two kernels per call:
-//   1. ForwardConnSweepKernel — one thread per connection. Skips dead conns.
+//   1. ForwardConnSweepKernel -- one thread per connection. Skips dead conns.
 //      Calls FP::Map(...) and atomicAdds the result into ForwardAcc[ToId].
-//   2. ForwardUnitApplyKernel — one thread per non-input unit. Calls
+//   2. ForwardUnitApplyKernel -- one thread per non-input unit. Calls
 //      FP::Apply(...) on the accumulated value, then resets the accumulator.
 //
 // Constraint (MVP): FP::Combine must be `+` over `float`. atomicAdd<float>
@@ -65,7 +65,7 @@ __global__ void ForwardUnitApplyKernel(size_t Begin, size_t End, UnitAlloc U,
 }
 
 // ---------------------------------------------------------------------------
-// Forward pass — Topological propagation
+// Forward pass -- Topological propagation
 // ---------------------------------------------------------------------------
 //
 // Same kernel pair as Pipeline, but the connection sweep is restricted to
@@ -107,7 +107,7 @@ __global__ void ForwardUnitApplyLevelKernel(size_t Begin, size_t End,
 }
 
 // ---------------------------------------------------------------------------
-// Backward pass — both propagation models. Walks connections in the
+// Backward pass -- both propagation models. Walks connections in the
 // forward direction by index but accumulates into the source unit's
 // BackwardAcc instead of the destination's ForwardAcc.
 // ---------------------------------------------------------------------------
@@ -172,7 +172,7 @@ __global__ void BackwardUnitApplyLevelKernel(size_t Begin, size_t End,
 }
 
 // ---------------------------------------------------------------------------
-// Update / prune phases — one thread per element, no reduction needed.
+// Update / prune phases -- one thread per element, no reduction needed.
 // ---------------------------------------------------------------------------
 
 template <typename UP, typename UnitAlloc, typename Globals>
@@ -244,7 +244,7 @@ __global__ void PruneConnectionsKernel(size_t NumConns, UnitAlloc U,
 }
 
 // ---------------------------------------------------------------------------
-// RecomputeLevels — level-parallel Kahn's algorithm
+// RecomputeLevels -- level-parallel Kahn's algorithm
 // ---------------------------------------------------------------------------
 //
 // Reset non-input unit levels in parallel.
@@ -326,7 +326,7 @@ ProcessFrontierKernel(uint32_t FrontierSize, uint16_t Level, UnitAlloc U,
 }
 
 // ---------------------------------------------------------------------------
-// AddConnections — proposal collection
+// AddConnections -- proposal collection
 // ---------------------------------------------------------------------------
 //
 // One thread per ordered (U, V) pair with U != V. Filters out pairs whose
@@ -380,7 +380,7 @@ CollectProposalsKernel(size_t NumUnits, uint16_t Neighbourhood, UnitAlloc U,
 }
 
 // ---------------------------------------------------------------------------
-// AddConnections — dedup commit
+// AddConnections -- dedup commit
 // ---------------------------------------------------------------------------
 //
 // Phase 3 splits in two: a flag kernel that marks the first occurrence of

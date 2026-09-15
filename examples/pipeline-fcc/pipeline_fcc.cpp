@@ -4,7 +4,7 @@
 #include <iostream>
 #include <vector>
 
-// Identity forward pass — easier to trace numerically than sigmoid/tanh
+// Identity forward pass -- easier to trace numerically than sigmoid/tanh
 // when following signal propagation layer by layer.
 struct IdentityForwardPass {
   using Accumulator = float;

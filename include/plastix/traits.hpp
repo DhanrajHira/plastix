@@ -179,9 +179,8 @@ struct DefaultForwardPass {
   }
 };
 
-// Sentinel noop policies — satisfy their concepts but the corresponding
-// Do*() methods in Network compile out the entire loop body via if constexpr
-// when these exact types are detected. There is no runtime overhead.
+// Sentinel noop policies -- satisfy their concepts but DoX() methods compile
+// out the entire loop body via if constexpr when these are detected.
 struct NoBackwardPass {
   using Accumulator = float;
   PLASTIX_HD static float Map(auto &, size_t, size_t, auto &, size_t, auto &) {
@@ -328,19 +327,7 @@ struct SoftmaxCrossEntropyLoss {
 struct EmptyGlobalState {};
 
 // ---------------------------------------------------------------------------
-// Default traits base — inherit and override individual policies as needed
-//
-// To define a custom network, inherit DefaultNetworkTraits and replace only
-// the policies you need. For example, to add a sigmoid activation:
-//
-//   struct MyTraits : DefaultNetworkTraits<UnitStateAllocator,
-//                                          ConnStateAllocator> {
-//     using ForwardPass = MySigmoidForwardPass;
-//   };
-//
-// UnitAlloc and ConnAlloc are the allocator types for units and connection
-// pages respectively. See alloc.hpp for how to extend unit state with extra
-// SOA fields without modifying any framework files.
+// Default traits base -- inherit and override individual policies as needed
 // ---------------------------------------------------------------------------
 
 template <typename Global = EmptyGlobalState> struct DefaultNetworkTraits {
@@ -372,9 +359,7 @@ template <typename Global = EmptyGlobalState> struct DefaultNetworkTraits {
 };
 
 // ---------------------------------------------------------------------------
-// NetworkTraits concept — validates that all policies in a traits struct
-// satisfy their respective concepts. This fires at the Network<Traits>
-// instantiation site, giving a clear error when a policy is malformed.
+// NetworkTraits concept -- validates that all policies satisfy their concepts
 // ---------------------------------------------------------------------------
 
 // Helper: resolve the unit allocator for a given traits type.

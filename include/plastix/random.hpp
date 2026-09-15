@@ -7,7 +7,7 @@
 // that runs identically in host and device code. For CPU-only builds we drop
 // the CCCL dependency entirely and use the self-contained replica below, which
 // is bit-for-bit identical to the thrust path (same minstd engine, same
-// [0,1) mapping, same lerp) — verified across the full (seed, counter) space.
+// [0,1) mapping, same lerp) -- verified across the full (seed, counter) space.
 #ifdef PLASTIX_HAS_CUDA
 #include <thrust/random.h>
 #endif

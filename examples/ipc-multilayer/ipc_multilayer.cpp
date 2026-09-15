@@ -1,5 +1,5 @@
 // ===========================================================================
-// Streaming iPC — Multi-Layer Regression Example
+// Streaming iPC -- Multi-Layer Regression Example
 // ===========================================================================
 //
 // This example implements the full Streaming incremental Predictive Coding
@@ -41,7 +41,7 @@
 //   (c) Update all weights with a local Hebbian rule:
 //         theta^(l) += alpha * eps^(l) * f(x^(l+1))^T
 //
-// Value nodes are *never reset* between observations — this is the defining
+// Value nodes are *never reset* between observations -- this is the defining
 // property of the streaming variant. The network state evolves continuously
 // as new data arrives.
 //
@@ -52,7 +52,7 @@
 // Plastix connections go from source (higher layer) to destination (lower
 // layer), matching the top-down prediction direction. Three extra per-unit
 // SOA fields (ValueNodeTag, ErrorTag, BottomUpTag) are added via
-// ExtraUnitFields in the traits — no framework source changes needed.
+// ExtraUnitFields in the traits -- no framework source changes needed.
 //
 // Pipeline propagation mode is used so that the forward pass accumulates all
 // connections in one sweep (reading current Activation values) before
@@ -64,18 +64,18 @@
 //   0. Pre-step: copy f(ValueNode) into Activation for non-input units.
 //      DoForwardPass clamps input units from the Input span.
 //
-//   1. DoForwardPass  [iPCForwardPass — PassPolicy, Pipeline mode]
+//   1. DoForwardPass  [iPCForwardPass -- PassPolicy, Pipeline mode]
 //        Map:     Weight * Activation(SrcId)  (source already has f(x))
 //        Combine: sums contributions
 //        Apply:   eps = ValueNode - ForwardAcc; stores in ErrorTag and
 //                 Activation
 //
-//   2. DoBackwardPass  [iPCBackwardPass — PassPolicy, Pipeline mode]
+//   2. DoBackwardPass  [iPCBackwardPass -- PassPolicy, Pipeline mode]
 //        Map:     Weight * ErrorTag(ToId)  (eps at destination)
 //          -> accumulated into BackwardAcc(FromId) = theta^T * eps
 //        Apply:   for hidden units, BottomUpTag = f'(x) * BackwardAcc
 //
-//   3. DoUpdateConnectionState  [iPCUpdateConn — UpdateConnPolicy]
+//   3. DoUpdateConnectionState  [iPCUpdateConn -- UpdateConnPolicy]
 //        UpdateIncomingConnection:
 //          reads  ErrorTag(DstId)     = eps at destination
 //          reads  ValueNodeTag(SrcId) = x at source, applies f()
@@ -166,7 +166,7 @@ struct iPCBackwardPass {
   PLASTIX_HD static float Combine(float A, float B) { return A + B; }
 
   // For hidden units: store bottom-up signal f'(x) * BackwardAcc.
-  // Input/output units are clamped — skip them.
+  // Input/output units are clamped -- skip them.
   PLASTIX_HD static void Apply(auto &U, size_t Id, auto &, float BackwardAcc) {
     if (Id >= HiddenBegin && Id < HiddenEnd) {
       float X = plastix::GetField<ValueNodeTag>(U, Id);
@@ -195,7 +195,7 @@ struct iPCUpdateConn {
 };
 
 // ---------------------------------------------------------------------------
-// Traits — Pipeline mode for simultaneous prediction across all layers
+// Traits -- Pipeline mode for simultaneous prediction across all layers
 // ---------------------------------------------------------------------------
 
 struct iPCTraits : plastix::DefaultNetworkTraits<> {
