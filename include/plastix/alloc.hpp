@@ -21,9 +21,7 @@ namespace alloc {
 
 template <typename T> using AllocId = size_t;
 
-// Atomic backing for `Count`. Under CUDA we need libcu++ so the same atomic
-// can be touched from both host and device kernels. Outside CUDA the standard
-// std::atomic is fine.
+// Atomic backing for Count under CUDA (libcu++ so host + device share it).
 #ifdef PLASTIX_HAS_CUDA
 using AtomicCount = cuda::std::atomic<size_t>;
 #else
@@ -41,14 +39,8 @@ struct SOAField {
   using Type = T;
 };
 
-// Storage backend abstraction. Under PLASTIX_HAS_CUDA we use
-// cudaMallocManaged so the same pointer is valid from both host and device.
-// This is a deliberate deviation from the explicit-copy plan in
-// notes/gpu-architecture.md: managed memory is significantly simpler to
-// reason about, keeps the SOA API contract identical between backends, and
-// is a reasonable starting point for an MVP. Tightening to explicit copies
-// can be done later without churning user-facing code.
-// TODO(plastix-gpu): switch to explicit cudaMalloc + staging copies.
+// TODO(plastix-gpu): switch to explicit cudaMalloc + staging copies; managed
+// memory is the MVP backend (identical SOA contract on both backends).
 namespace detail {
 
 inline void *AllocStorage(size_t Bytes) {
@@ -80,13 +72,9 @@ template <typename T, typename... Fields> class SOAAllocator {
   std::tuple<typename Fields::Type *...> FieldPtrs;
   std::tuple<typename Fields::Type *...> BackFieldPtrs;
   size_t *PermScratch;
-  // Heap allocation so the atomic lives in managed memory (for CUDA) and the
-  // allocator object itself stays trivially movable across host/device.
   AtomicCount *CountPtr;
   size_t Capacity;
-  // True for the unique owning instance constructed via `SOAAllocator(N)`.
-  // Shallow copies (used to pass the allocator by value into CUDA kernels)
-  // share the same backing pointers but must not free them on destruction.
+  // Shallow copies (CUDA) must not free.
   bool Owns;
 
   // Resolves FieldTag to its index in the Fields... pack at compile time.
@@ -126,16 +114,13 @@ public:
         BackFieldPtrs);
     PermScratch = static_cast<size_t *>(
         detail::AllocStorage(NumElements * sizeof(size_t)));
-    CountPtr = static_cast<AtomicCount *>(
-        detail::AllocStorage(sizeof(AtomicCount)));
+    CountPtr =
+        static_cast<AtomicCount *>(detail::AllocStorage(sizeof(AtomicCount)));
     // Placement-new the atomic in (already zero-initialized) storage.
     ::new (CountPtr) AtomicCount{0};
   }
 
-  // Host-only destructor body. The shallow-copy path (kernel parameters) lands
-  // inside __device__ contexts where cudaFree is unavailable; the device
-  // path is deliberately empty. The host-side owning instance is responsible
-  // for the eventual free.
+  // Host-destructor body (device shallow-copy path is a no-op).
   ~SOAAllocator() {
 #ifndef __CUDA_ARCH__
     if (!Owns)
@@ -158,9 +143,7 @@ public:
 #endif
   }
 
-  // Shallow copy: shares pointers, does NOT take ownership. Used to hand the
-  // allocator into a CUDA kernel by value. Move + assign remain disabled
-  // because there's no use case for them in the framework.
+  // Shallow copy for CUDA non-owning copies (move/assign disabled below).
   PLASTIX_HD SOAAllocator(const SOAAllocator &Other) noexcept
       : FieldPtrs{Other.FieldPtrs}, BackFieldPtrs{Other.BackFieldPtrs},
         PermScratch{Other.PermScratch}, CountPtr{Other.CountPtr},
