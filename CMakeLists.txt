@@ -4,7 +4,6 @@ project(plastix VERSION 0.1.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
-set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 option(PLASTIX_BUILD_TESTS "Build tests" ON)
 option(PLASTIX_BUILD_BENCHMARKS "Build benchmarks" ON)
@@ -21,15 +20,11 @@ target_include_directories(plastix PUBLIC
 
 target_compile_options(plastix PRIVATE -Wall -Wextra -Wpedantic)
 
-# CCCL (Thrust + CUB + libcudacxx) is a CUDA-only dependency. It is used by
-# cuda_primitives.hpp (cub::DeviceScan / cub::DeviceRadixSort) and the CUDA
-# branch of random.hpp (thrust::random) — both guarded behind PLASTIX_HAS_CUDA.
-# A CPU-only build (PLASTIX_ENABLE_CUDA=OFF) uses the self-contained RNG replica
-# in random.hpp and pulls in no CCCL at all, so we neither find nor link it.
+# CCCL (Thrust + CUB + libcudacxx) is CUDA-only; a CPU-only build uses the RNG
+# replica in random.hpp and links nothing here. See random.hpp / cuda_primitives.hpp.
 if(PLASTIX_ENABLE_CUDA)
-    # CCCL ships with the CUDA toolkit but its CMake config lives outside the
-    # default search path; use CUDAToolkit's discovery to point find_package at
-    # the right dir.
+    # CCCL's CMake config lives outside the default search path; use CUDAToolkit
+    # discovery to point find_package at it.
     find_package(CUDAToolkit REQUIRED)
     list(APPEND CMAKE_PREFIX_PATH "${CUDAToolkit_LIBRARY_ROOT}")
     find_package(CCCL CONFIG REQUIRED)
