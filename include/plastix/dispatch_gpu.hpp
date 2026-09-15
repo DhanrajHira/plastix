@@ -49,18 +49,17 @@ inline void DoForwardTopological(UA &UnitAlloc, CA &ConnAlloc, Globals *G,
     uint32_t End = Ranges[L - 1].End;
     if (End > Begin) {
       unsigned Block = cuda::DefaultBlockSize;
-      unsigned Grid =
-          static_cast<unsigned>(cuda::GridSize(End - Begin, Block));
+      unsigned Grid = static_cast<unsigned>(cuda::GridSize(End - Begin, Block));
       cuda::ForwardConnSweepLevelKernel<FP>
-          <<<Grid, Block>>>(Begin, End, UnitAlloc, ConnAlloc, G);
+          <<<Grid, Block>>>(Begin, End, UnitAlloc.view(), ConnAlloc.view(), G);
       PLASTIX_CUDA_CHECK_KERNEL();
     }
     if (NumUnits > NumInput) {
       unsigned Block = cuda::DefaultBlockSize;
-      unsigned Grid = static_cast<unsigned>(
-          cuda::GridSize(NumUnits - NumInput, Block));
+      unsigned Grid =
+          static_cast<unsigned>(cuda::GridSize(NumUnits - NumInput, Block));
       cuda::ForwardUnitApplyLevelKernel<FP>
-          <<<Grid, Block>>>(NumInput, NumUnits, L, UnitAlloc, G);
+          <<<Grid, Block>>>(NumInput, NumUnits, L, UnitAlloc.view(), G);
       PLASTIX_CUDA_CHECK_KERNEL();
     }
   }
@@ -79,16 +78,16 @@ inline void DoForwardPipeline(UA &UnitAlloc, CA &ConnAlloc, Globals *G,
     unsigned Block = cuda::DefaultBlockSize;
     unsigned Grid = static_cast<unsigned>(cuda::GridSize(NumConns, Block));
     cuda::ForwardConnSweepKernel<FP>
-        <<<Grid, Block>>>(NumConns, UnitAlloc, ConnAlloc, G);
+        <<<Grid, Block>>>(NumConns, UnitAlloc.view(), ConnAlloc.view(), G);
     PLASTIX_CUDA_CHECK_KERNEL();
   }
   size_t NumUnits = UnitAlloc.Size();
   if (NumUnits > NumInput) {
     unsigned Block = cuda::DefaultBlockSize;
-    unsigned Grid = static_cast<unsigned>(
-        cuda::GridSize(NumUnits - NumInput, Block));
+    unsigned Grid =
+        static_cast<unsigned>(cuda::GridSize(NumUnits - NumInput, Block));
     cuda::ForwardUnitApplyKernel<FP>
-        <<<Grid, Block>>>(NumInput, NumUnits, UnitAlloc, G);
+        <<<Grid, Block>>>(NumInput, NumUnits, UnitAlloc.view(), G);
     PLASTIX_CUDA_CHECK_KERNEL();
   }
   PLASTIX_CUDA_CHECK(cudaDeviceSynchronize());
@@ -109,18 +108,17 @@ inline void DoBackwardTopological(UA &UnitAlloc, CA &ConnAlloc, Globals *G,
     uint32_t End = Ranges[L].End;
     if (End > Begin) {
       unsigned Block = cuda::DefaultBlockSize;
-      unsigned Grid =
-          static_cast<unsigned>(cuda::GridSize(End - Begin, Block));
+      unsigned Grid = static_cast<unsigned>(cuda::GridSize(End - Begin, Block));
       cuda::BackwardConnSweepLevelKernel<BP>
-          <<<Grid, Block>>>(Begin, End, UnitAlloc, ConnAlloc, G);
+          <<<Grid, Block>>>(Begin, End, UnitAlloc.view(), ConnAlloc.view(), G);
       PLASTIX_CUDA_CHECK_KERNEL();
     }
     if (NumUnits > NumInput) {
       unsigned Block = cuda::DefaultBlockSize;
-      unsigned Grid = static_cast<unsigned>(
-          cuda::GridSize(NumUnits - NumInput, Block));
+      unsigned Grid =
+          static_cast<unsigned>(cuda::GridSize(NumUnits - NumInput, Block));
       cuda::BackwardUnitApplyLevelKernel<BP>
-          <<<Grid, Block>>>(NumInput, NumUnits, L, UnitAlloc, G);
+          <<<Grid, Block>>>(NumInput, NumUnits, L, UnitAlloc.view(), G);
       PLASTIX_CUDA_CHECK_KERNEL();
     }
   }
@@ -139,7 +137,7 @@ inline void DoBackwardPipeline(UA &UnitAlloc, CA &ConnAlloc, Globals *G,
     unsigned Block = cuda::DefaultBlockSize;
     unsigned Grid = static_cast<unsigned>(cuda::GridSize(NumConns, Block));
     cuda::BackwardConnSweepKernel<BP>
-        <<<Grid, Block>>>(NumConns, UnitAlloc, ConnAlloc, G);
+        <<<Grid, Block>>>(NumConns, UnitAlloc.view(), ConnAlloc.view(), G);
     PLASTIX_CUDA_CHECK_KERNEL();
   }
   size_t NumUnits = UnitAlloc.Size();
@@ -147,7 +145,7 @@ inline void DoBackwardPipeline(UA &UnitAlloc, CA &ConnAlloc, Globals *G,
     unsigned Block = cuda::DefaultBlockSize;
     unsigned Grid = static_cast<unsigned>(cuda::GridSize(NumUnits, Block));
     cuda::BackwardUnitApplyKernel<BP>
-        <<<Grid, Block>>>(size_t{0}, NumUnits, UnitAlloc, G);
+        <<<Grid, Block>>>(size_t{0}, NumUnits, UnitAlloc.view(), G);
     PLASTIX_CUDA_CHECK_KERNEL();
   }
   PLASTIX_CUDA_CHECK(cudaDeviceSynchronize());
@@ -164,7 +162,7 @@ inline void DoUpdateUnit(UA &UnitAlloc, Globals *G) {
     return;
   unsigned Block = cuda::DefaultBlockSize;
   unsigned Grid = static_cast<unsigned>(cuda::GridSize(NumUnits, Block));
-  cuda::UpdateUnitKernel<UP><<<Grid, Block>>>(NumUnits, UnitAlloc, G);
+  cuda::UpdateUnitKernel<UP><<<Grid, Block>>>(NumUnits, UnitAlloc.view(), G);
   PLASTIX_CUDA_CHECK_KERNEL();
   PLASTIX_CUDA_CHECK(cudaDeviceSynchronize());
 }
@@ -177,11 +175,11 @@ inline void DoUpdateConn(UA &UnitAlloc, CA &ConnAlloc, Globals *G) {
   unsigned Block = cuda::DefaultBlockSize;
   unsigned Grid = static_cast<unsigned>(cuda::GridSize(NumConns, Block));
   cuda::UpdateConnIncomingKernel<UC>
-      <<<Grid, Block>>>(NumConns, UnitAlloc, ConnAlloc, G);
+      <<<Grid, Block>>>(NumConns, UnitAlloc.view(), ConnAlloc.view(), G);
   PLASTIX_CUDA_CHECK_KERNEL();
   PLASTIX_CUDA_CHECK(cudaDeviceSynchronize());
   cuda::UpdateConnOutgoingKernel<UC>
-      <<<Grid, Block>>>(NumConns, UnitAlloc, ConnAlloc, G);
+      <<<Grid, Block>>>(NumConns, UnitAlloc.view(), ConnAlloc.view(), G);
   PLASTIX_CUDA_CHECK_KERNEL();
   PLASTIX_CUDA_CHECK(cudaDeviceSynchronize());
 }
@@ -197,7 +195,7 @@ inline void DoPruneUnits(UA &UnitAlloc, Globals *G) {
     return;
   unsigned Block = cuda::DefaultBlockSize;
   unsigned Grid = static_cast<unsigned>(cuda::GridSize(NumUnits, Block));
-  cuda::PruneUnitsKernel<PP><<<Grid, Block>>>(NumUnits, UnitAlloc, G);
+  cuda::PruneUnitsKernel<PP><<<Grid, Block>>>(NumUnits, UnitAlloc.view(), G);
   PLASTIX_CUDA_CHECK_KERNEL();
   PLASTIX_CUDA_CHECK(cudaDeviceSynchronize());
 }
@@ -211,7 +209,7 @@ inline void DoPruneConnections(UA &UnitAlloc, CA &ConnAlloc, Globals *G) {
   unsigned Block = cuda::DefaultBlockSize;
   unsigned Grid = static_cast<unsigned>(cuda::GridSize(NumConns, Block));
   cuda::PruneConnectionsKernel<HasUnitPrune, HasConnPrune, CP>
-      <<<Grid, Block>>>(NumConns, UnitAlloc, ConnAlloc, G);
+      <<<Grid, Block>>>(NumConns, UnitAlloc.view(), ConnAlloc.view(), G);
   PLASTIX_CUDA_CHECK_KERNEL();
   PLASTIX_CUDA_CHECK(cudaDeviceSynchronize());
 }
@@ -227,7 +225,8 @@ inline void DoAddUnits(UA &UnitAlloc, Globals *G, uint16_t MaxLvl) {
     return;
   unsigned Block = cuda::DefaultBlockSize;
   unsigned Grid = static_cast<unsigned>(cuda::GridSize(NumUnits, Block));
-  cuda::AddUnitsKernel<AP><<<Grid, Block>>>(NumUnits, MaxLvl, UnitAlloc, G);
+  cuda::AddUnitsKernel<AP>
+      <<<Grid, Block>>>(NumUnits, MaxLvl, UnitAlloc.view(), G);
   PLASTIX_CUDA_CHECK_KERNEL();
   PLASTIX_CUDA_CHECK(cudaDeviceSynchronize());
 }
@@ -257,8 +256,9 @@ inline bool DoAddConnections(UA &UnitAlloc, CA &ConnAlloc, PA &ProposalAlloc,
   size_t Total = NumUnits * NumUnits;
   unsigned Block = cuda::DefaultBlockSize;
   unsigned Grid = static_cast<unsigned>(cuda::GridSize(Total, Block));
-  cuda::CollectProposalsKernel<AC><<<Grid, Block>>>(
-      NumUnits, Neighbourhood, UnitAlloc, G, Props, Counter, MaxProposals);
+  cuda::CollectProposalsKernel<AC><<<Grid, Block>>>(NumUnits, Neighbourhood,
+                                                    UnitAlloc.view(), G, Props,
+                                                    Counter, MaxProposals);
   PLASTIX_CUDA_CHECK_KERNEL();
   PLASTIX_CUDA_CHECK(cudaDeviceSynchronize());
   size_t NumProposals = *Counter;
@@ -288,8 +288,9 @@ inline bool DoAddConnections(UA &UnitAlloc, CA &ConnAlloc, PA &ProposalAlloc,
     if (Range.first != static_cast<size_t>(-1)) {
       unsigned CommitGrid =
           static_cast<unsigned>(cuda::GridSize(NumProposals, Block));
-      cuda::CommitProposalsKernel<AC><<<CommitGrid, Block>>>(
-          NumProposals, Props, Flags, Range.first, UnitAlloc, ConnAlloc, G);
+      cuda::CommitProposalsKernel<AC>
+          <<<CommitGrid, Block>>>(NumProposals, Props, Flags, Range.first,
+                                  UnitAlloc.view(), ConnAlloc.view(), G);
       PLASTIX_CUDA_CHECK_KERNEL();
       PLASTIX_CUDA_CHECK(cudaDeviceSynchronize());
       Committed = true;
@@ -320,7 +321,7 @@ inline void RecomputeLevels(UA &UnitAlloc, CA &ConnAlloc, KA &KahnAlloc,
     size_t Span = NumUnits - NumInput;
     unsigned Grid = static_cast<unsigned>(cuda::GridSize(Span));
     cuda::ResetLevelsKernel<<<Grid, cuda::DefaultBlockSize>>>(
-        NumInput, NumUnits, UnitAlloc);
+        NumInput, NumUnits, UnitAlloc.view());
     PLASTIX_CUDA_CHECK_KERNEL();
   }
 
@@ -335,18 +336,17 @@ inline void RecomputeLevels(UA &UnitAlloc, CA &ConnAlloc, KA &KahnAlloc,
 
   unsigned ConnGrid = static_cast<unsigned>(cuda::GridSize(NumConns));
   cuda::CountDegreesKernel<<<ConnGrid, cuda::DefaultBlockSize>>>(
-      NumConns, ConnAlloc, InDegree, OutOffset);
+      NumConns, ConnAlloc.view(), InDegree, OutOffset);
   PLASTIX_CUDA_CHECK_KERNEL();
 
   // Exclusive scan over OutOffset[0..NumUnits]; the slot at index NumUnits
   // is zero-initialized so it ends up holding the total edge count.
   cuda::ExclusiveScanInPlace(OutOffset, NumUnits + 1);
 
-  PLASTIX_CUDA_CHECK(cudaMemcpy(WritePos, OutOffset,
-                                NumUnits * sizeof(uint32_t),
-                                cudaMemcpyDefault));
+  PLASTIX_CUDA_CHECK(cudaMemcpy(
+      WritePos, OutOffset, NumUnits * sizeof(uint32_t), cudaMemcpyDefault));
   cuda::ScatterEdgesKernel<<<ConnGrid, cuda::DefaultBlockSize>>>(
-      NumConns, ConnAlloc, WritePos, OutEdges);
+      NumConns, ConnAlloc.view(), WritePos, OutEdges);
   PLASTIX_CUDA_CHECK_KERNEL();
 
   if (NumInput > 0) {
@@ -364,11 +364,10 @@ inline void RecomputeLevels(UA &UnitAlloc, CA &ConnAlloc, KA &KahnAlloc,
   uint16_t CurrentLevel = 0;
   while (FrontierSize > 0) {
     *NextSize = 0;
-    unsigned FrontierGrid =
-        static_cast<unsigned>(cuda::GridSize(FrontierSize));
+    unsigned FrontierGrid = static_cast<unsigned>(cuda::GridSize(FrontierSize));
     cuda::ProcessFrontierKernel<<<FrontierGrid, cuda::DefaultBlockSize>>>(
-        FrontierSize, CurrentLevel, UnitAlloc, ConnAlloc, InDegree, OutOffset,
-        OutEdges, Frontier, NextFrontier, NextSize);
+        FrontierSize, CurrentLevel, UnitAlloc.view(), ConnAlloc.view(),
+        InDegree, OutOffset, OutEdges, Frontier, NextFrontier, NextSize);
     PLASTIX_CUDA_CHECK_KERNEL();
     PLASTIX_CUDA_CHECK(cudaDeviceSynchronize());
     ++CurrentLevel;
@@ -388,8 +387,8 @@ inline void RecomputeLevels(UA &UnitAlloc, CA &ConnAlloc, KA &KahnAlloc,
 
 template <typename FP, typename UA, typename CA, typename Globals,
           typename RangesT>
-inline void DoForwardTopological(UA &, CA &, Globals *, size_t,
-                                 const RangesT &, uint16_t) {}
+inline void DoForwardTopological(UA &, CA &, Globals *, size_t, const RangesT &,
+                                 uint16_t) {}
 
 template <typename FP, typename UA, typename CA, typename Globals>
 inline void DoForwardPipeline(UA &, CA &, Globals *, size_t) {}

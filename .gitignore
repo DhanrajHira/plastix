@@ -68,5 +68,6 @@ vcpkg_installed/
 Testing/
 .cache/
 
-# Notes
+# Notes (scratch, ignored) -- but ADRs are tracked design records.
 notes/
+!notes/adr-*.md

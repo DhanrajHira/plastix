@@ -68,14 +68,26 @@ inline void FreeStorage(void *P, size_t Bytes) {
 
 } // namespace detail
 
-template <typename T, typename... Fields> class SOAAllocator {
-  std::tuple<typename Fields::Type *...> FieldPtrs;
-  std::tuple<typename Fields::Type *...> BackFieldPtrs;
-  size_t *PermScratch;
-  AtomicCount *CountPtr;
-  size_t Capacity;
-  // Shallow copies (CUDA) must not free.
-  bool Owns;
+// Forward declaration so SoaView can befriend its owning allocator.
+template <typename T, typename... Fields> class SOAAllocator;
+
+// Non-owning, device-copyable handle over the SOA arenas. Holds only plain
+// pointers/counters and never frees them (SOAAllocator owns the storage), so it
+// is safe to pass by value into CUDA kernels: no host-only destructor rides
+// along. All per-element and device-callable operations live here; the owning
+// SOAAllocator forwards to them.
+//
+// TODO(plastix-gpu): FieldPtrs/BackFieldPtrs are std::tuples, which are not
+// guaranteed trivially copyable -- kernel parameters ideally are. This copies
+// on-device today under --expt-relaxed-constexpr (same as the previous
+// allocator); swap the tuples for a trivially-copyable pointer aggregate to
+// make SoaView strictly trivially copyable.
+template <typename T, typename... Fields> class SoaView {
+  std::tuple<typename Fields::Type *...> FieldPtrs{};
+  std::tuple<typename Fields::Type *...> BackFieldPtrs{};
+  size_t *PermScratch = nullptr;
+  AtomicCount *CountPtr = nullptr;
+  size_t Capacity = 0;
 
   // Resolves FieldTag to its index in the Fields... pack at compile time.
   // Uses a short-circuit fold: increments I for each non-matching tag until
@@ -87,70 +99,18 @@ template <typename T, typename... Fields> class SOAAllocator {
     return I;
   }
 
-  static constexpr size_t MaxFieldSize() {
-    return std::max({sizeof(typename Fields::Type)...});
-  }
+  friend class SOAAllocator<T, Fields...>;
 
 public:
-  // Mark host/device callable accessors. The hot loop inside CUDA kernels
-  // calls Get<Tag>() per element, so it must be device-callable.
-  explicit SOAAllocator(size_t NumElements)
-      : FieldPtrs{}, BackFieldPtrs{}, PermScratch{nullptr}, CountPtr{nullptr},
-        Capacity{NumElements}, Owns{true} {
-    size_t ArenaSize = NumElements * MaxFieldSize();
-    std::apply(
-        [ArenaSize](auto &...Ptrs) {
-          ((Ptrs =
-                static_cast<decltype(+Ptrs)>(detail::AllocStorage(ArenaSize))),
-           ...);
-        },
-        FieldPtrs);
-    std::apply(
-        [ArenaSize](auto &...Ptrs) {
-          ((Ptrs =
-                static_cast<decltype(+Ptrs)>(detail::AllocStorage(ArenaSize))),
-           ...);
-        },
-        BackFieldPtrs);
-    PermScratch = static_cast<size_t *>(
-        detail::AllocStorage(NumElements * sizeof(size_t)));
-    CountPtr =
-        static_cast<AtomicCount *>(detail::AllocStorage(sizeof(AtomicCount)));
-    // Placement-new the atomic in (already zero-initialized) storage.
-    ::new (CountPtr) AtomicCount{0};
-  }
+  SoaView() = default;
+  SoaView &operator=(const SoaView &) = default;
 
-  // Host-destructor body (device shallow-copy path is a no-op).
-  ~SOAAllocator() {
-#ifndef __CUDA_ARCH__
-    if (!Owns)
-      return;
-    if (CountPtr)
-      CountPtr->~AtomicCount();
-    detail::FreeStorage(CountPtr, sizeof(AtomicCount));
-    size_t ArenaSize = Capacity * MaxFieldSize();
-    std::apply(
-        [ArenaSize](auto *...Ptrs) {
-          ((detail::FreeStorage(Ptrs, ArenaSize)), ...);
-        },
-        FieldPtrs);
-    std::apply(
-        [ArenaSize](auto *...Ptrs) {
-          ((detail::FreeStorage(Ptrs, ArenaSize)), ...);
-        },
-        BackFieldPtrs);
-    detail::FreeStorage(PermScratch, Capacity * sizeof(size_t));
-#endif
-  }
-
-  // Shallow copy for CUDA non-owning copies (move/assign disabled below).
-  PLASTIX_HD SOAAllocator(const SOAAllocator &Other) noexcept
+  // Explicit host/device copy so the handle passes into kernels by value; the
+  // implicit copy would be host-only through the std::tuple members.
+  PLASTIX_HD SoaView(const SoaView &Other) noexcept
       : FieldPtrs{Other.FieldPtrs}, BackFieldPtrs{Other.BackFieldPtrs},
         PermScratch{Other.PermScratch}, CountPtr{Other.CountPtr},
-        Capacity{Other.Capacity}, Owns{false} {}
-  SOAAllocator &operator=(const SOAAllocator &) = delete;
-  SOAAllocator(SOAAllocator &&) = delete;
-  SOAAllocator &operator=(SOAAllocator &&) = delete;
+        Capacity{Other.Capacity} {}
 
   PLASTIX_HD AllocId<T> Allocate() {
     size_t Id = CountPtr->fetch_add(1);
@@ -169,7 +129,7 @@ public:
         },
         BackFieldPtrs);
     return Id;
-  };
+  }
 
   std::pair<size_t, size_t> AllocateMany(size_t N) {
     size_t Begin = CountPtr->fetch_add(N);
@@ -196,25 +156,25 @@ public:
     constexpr auto Index = IndexOf<FieldTag>();
     const auto &Field = std::get<Index>(FieldPtrs);
     return Field[Id];
-  };
+  }
 
   template <typename FieldTag> PLASTIX_HD const auto &Get(AllocId<T> Id) const {
     constexpr auto Index = IndexOf<FieldTag>();
     const auto &Field = std::get<Index>(FieldPtrs);
     return Field[Id];
-  };
+  }
 
   PLASTIX_HD auto &Get(AllocId<T> Id)
     requires(sizeof...(Fields) == 1)
   {
     return std::get<0>(FieldPtrs)[Id];
-  };
+  }
 
   PLASTIX_HD const auto &Get(AllocId<T> Id) const
     requires(sizeof...(Fields) == 1)
   {
     return std::get<0>(FieldPtrs)[Id];
-  };
+  }
 
   template <typename FieldTag> PLASTIX_HD auto *GetArrayFor() {
     constexpr auto Index = IndexOf<FieldTag>();
@@ -243,6 +203,119 @@ public:
       GatherField);
     std::swap(FieldPtrs, BackFieldPtrs);
   }
+};
+
+// Owning RAII allocator. Constructs the SOA arenas (mmap or cudaMallocManaged),
+// exposes a non-owning SoaView for host code and kernel launches, and frees the
+// storage on destruction. Move-only, so exactly one owner frees.
+template <typename T, typename... Fields> class SOAAllocator {
+  SoaView<T, Fields...> View;
+
+  static constexpr size_t MaxFieldSize() {
+    return std::max({sizeof(typename Fields::Type)...});
+  }
+
+  void Release() {
+    if (View.CountPtr == nullptr)
+      return;
+    View.CountPtr->~AtomicCount();
+    detail::FreeStorage(View.CountPtr, sizeof(AtomicCount));
+    size_t ArenaSize = View.Capacity * MaxFieldSize();
+    std::apply(
+        [ArenaSize](auto *...Ptrs) {
+          ((detail::FreeStorage(Ptrs, ArenaSize)), ...);
+        },
+        View.FieldPtrs);
+    std::apply(
+        [ArenaSize](auto *...Ptrs) {
+          ((detail::FreeStorage(Ptrs, ArenaSize)), ...);
+        },
+        View.BackFieldPtrs);
+    detail::FreeStorage(View.PermScratch, View.Capacity * sizeof(size_t));
+  }
+
+public:
+  explicit SOAAllocator(size_t NumElements) {
+    View.Capacity = NumElements;
+    size_t ArenaSize = NumElements * MaxFieldSize();
+    std::apply(
+        [ArenaSize](auto &...Ptrs) {
+          ((Ptrs =
+                static_cast<decltype(+Ptrs)>(detail::AllocStorage(ArenaSize))),
+           ...);
+        },
+        View.FieldPtrs);
+    std::apply(
+        [ArenaSize](auto &...Ptrs) {
+          ((Ptrs =
+                static_cast<decltype(+Ptrs)>(detail::AllocStorage(ArenaSize))),
+           ...);
+        },
+        View.BackFieldPtrs);
+    View.PermScratch = static_cast<size_t *>(
+        detail::AllocStorage(NumElements * sizeof(size_t)));
+    View.CountPtr =
+        static_cast<AtomicCount *>(detail::AllocStorage(sizeof(AtomicCount)));
+    // Placement-new the atomic in (already zero-initialized) storage.
+    ::new (View.CountPtr) AtomicCount{0};
+  }
+
+  ~SOAAllocator() { Release(); }
+
+  SOAAllocator(const SOAAllocator &) = delete;
+  SOAAllocator &operator=(const SOAAllocator &) = delete;
+
+  // Move transfers ownership; the moved-from view is marked empty (CountPtr
+  // null) so its destructor is a no-op.
+  SOAAllocator(SOAAllocator &&Other) noexcept : View{Other.View} {
+    Other.View.CountPtr = nullptr;
+  }
+  SOAAllocator &operator=(SOAAllocator &&Other) noexcept {
+    if (this != &Other) {
+      Release();
+      View = Other.View;
+      Other.View.CountPtr = nullptr;
+    }
+    return *this;
+  }
+
+  // Non-owning handle for host code and kernel launches.
+  PLASTIX_HD SoaView<T, Fields...> view() const { return View; }
+
+  // Forwarders so existing call sites keep working through the owner.
+  PLASTIX_HD AllocId<T> Allocate() { return View.Allocate(); }
+  std::pair<size_t, size_t> AllocateMany(size_t N) {
+    return View.AllocateMany(N);
+  }
+
+  template <typename FieldTag> PLASTIX_HD auto &Get(AllocId<T> Id) {
+    return View.template Get<FieldTag>(Id);
+  }
+  template <typename FieldTag> PLASTIX_HD const auto &Get(AllocId<T> Id) const {
+    return View.template Get<FieldTag>(Id);
+  }
+  PLASTIX_HD auto &Get(AllocId<T> Id)
+    requires(sizeof...(Fields) == 1)
+  {
+    return View.Get(Id);
+  }
+  PLASTIX_HD const auto &Get(AllocId<T> Id) const
+    requires(sizeof...(Fields) == 1)
+  {
+    return View.Get(Id);
+  }
+
+  template <typename FieldTag> PLASTIX_HD auto *GetArrayFor() {
+    return View.template GetArrayFor<FieldTag>();
+  }
+  template <typename FieldTag> PLASTIX_HD const auto *GetArrayFor() const {
+    return View.template GetArrayFor<FieldTag>();
+  }
+
+  PLASTIX_HD size_t Size() const { return View.Size(); }
+  PLASTIX_HD size_t GetCapacity() const { return View.GetCapacity(); }
+  PLASTIX_HD size_t *PermutationScratch() { return View.PermutationScratch(); }
+  void Gather(size_t N) { View.Gather(N); }
 };
 
 } // namespace alloc
