@@ -81,10 +81,6 @@ template <NetworkTraits Traits> class Network {
   }
 
 public:
-  // Variadic layer constructor. Each Builder is a callable that takes
-  // (UnitAlloc, ConnAlloc, PrevLayerRange) and returns the UnitRange it
-  // created. The fold expression chains them left-to-right, so each layer
-  // receives the range produced by the previous one.
   template <typename... Builders>
     requires(sizeof...(Builders) > 0 &&
              (LayerBuilder<Builders, UnitAllocator, ConnAllocator> && ...))
@@ -110,7 +106,6 @@ public:
       SortConnectionsByLevel();
   }
 
-  // Convenience constructor for single-layer (input → output) networks.
   Network(size_t InputDim, size_t OutputDim = 1)
       : Network(InputDim, FullyConnected<>{OutputDim}) {}
 
@@ -132,20 +127,6 @@ public:
 
   size_t GetStep() const { return Step; }
 
-  // Runs one forward pass. Execution is two-phase:
-  //
-  //   Phase 1 — accumulate: iterate all connection pages in order. Pages are
-  //     sorted by ToUnitIdx, so a destination change signals that the current
-  //     accumulator is complete and should be flushed to CurrentActivation.
-  //     FP::Map is called per slot to compute each connection's contribution.
-  //
-  //   Phase 2 — activate: iterate all non-input units and call
-  //     FP::CalculateAndApply on their accumulated sums to apply the
-  //     activation function (and any side effects such as error computation).
-  //
-  // Activations double-buffer between ActivationA and ActivationB each step
-  // (see CurrentActivation/PreviousActivation). Input units are written into
-  // PreviousActivation so they are immediately visible as sources.
   void DoForwardPass(std::span<const float> Inputs) {
     using FP = typename Traits::ForwardPass;
     using Acc = typename FP::Accumulator;
@@ -227,11 +208,6 @@ public:
     }
   }
 
-  // Updates connection weights (or other per-connection state) via two
-  // separate sweeps of all pages — see UpdateConnPolicy for why two sweeps
-  // are needed. Both sweeps pass PageId and SlotIdx so the policy can write
-  // directly to the weight stored in the connection page.
-  // Compiled out entirely when UpdateConn = NoUpdateConn.
   void DoUpdateConnectionState() {
     if constexpr (std::is_same_v<typename Traits::UpdateConn, NoUpdateConn>)
       return;
@@ -256,15 +232,6 @@ public:
     }
   }
 
-  // Removes connections whose source or destination unit is pruned, or that
-  // are independently flagged by PruneConnPolicy. For each page:
-  //   1. If the destination unit is pruned, zero the page's Count and skip.
-  //   2. Otherwise, build an Alive bitmask over slots, calling ShouldPrune
-  //      and checking PrunedTag on source units as appropriate.
-  //   3. Call CompactPage to move surviving slots to the front in-place, then
-  //      update Count to the number of survivors.
-  // The if constexpr guards remove dead-unit and/or dead-connection checks
-  // when the corresponding policy is a noop.
   void DoPruneConnections() {
     if constexpr (std::is_same_v<typename Traits::PruneUnit, NoPruneUnit> &&
                   std::is_same_v<typename Traits::PruneConn, NoPruneConn>)
@@ -319,8 +286,6 @@ public:
     DoForwardPass(Inputs);
     DoCalculateLoss(Targets);
     DoBackwardPass();
-    DoAddUnits();
-    DoAddConnections();
     DoUpdateUnitState();
     DoUpdateConnectionState();
     DoPruneUnits();
@@ -334,9 +299,6 @@ public:
     DoResetGlobalState();
   }
 
-  // Returns the output activations from the last completed forward pass.
-  // Reads from PreviousActivation (the buffer written by the most recent
-  // DoForwardPass call) because Step has already been incremented.
   std::span<const float> GetOutput() const {
     const float *Base = &GetActivation(UnitAlloc, OutputRange.Begin);
     return {Base, OutputRange.Size()};

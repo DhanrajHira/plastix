@@ -83,9 +83,6 @@ template <typename T, typename... Fields> class SoaView {
   AtomicCount *CountPtr = nullptr;
   size_t Capacity = 0;
 
-  // Resolves FieldTag to its index in the Fields... pack at compile time.
-  // Uses a short-circuit fold: increments I for each non-matching tag until
-  // the matching one is found, then the && chain stops.
   template <typename FieldTag> constexpr static size_t IndexOf() {
     size_t I = 0;
     ((std::is_same_v<FieldTag, typename Fields::Tag> ? false : (++I, true)) &&

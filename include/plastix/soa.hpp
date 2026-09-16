@@ -8,8 +8,6 @@
 #if defined(PLASTIX_SOA_MODE_TAGS)
 #undef PLASTIX_SOA_MODE_TAGS
 
-// Emits: struct Name {}; using NameId = AllocId<Name>;
-//        struct FieldNameTag {};  (one per FIELD)
 #define SOA_TYPE(Name)                                                         \
   struct Name {};                                                              \
   using Name##Id = plastix::alloc::AllocId<Name>;
@@ -20,7 +18,6 @@
 #elif defined(PLASTIX_SOA_MODE_ALLOC)
 #undef PLASTIX_SOA_MODE_ALLOC
 
-// Emits: using NameAllocator = SOAAllocator<Name, SOAField<Tag, Type>, ...>;
 #define SOA_TYPE(Name)                                                         \
   using Name##Allocator = plastix::alloc::SOAAllocator < Name
 #define FIELD(Name, Type) , plastix::alloc::SOAField<Name##Tag, Type>
@@ -29,9 +26,6 @@
 #elif defined(PLASTIX_SOA_MODE_HANDLE)
 #undef PLASTIX_SOA_MODE_HANDLE
 
-// Emits: struct NameHandle { ...; Type &GetFieldName(Alloc_ &A); ... };
-// The handle stores an AllocId and provides named accessors so call sites
-// can write handle.GetActivationA(alloc) instead of alloc.Get<Tag>(id).
 #define SOA_TYPE(Name)                                                         \
   struct Name##Handle {                                                        \
     using Alloc_ = Name##Allocator;                                            \
