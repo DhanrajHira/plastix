@@ -1,4 +1,4 @@
-add_executable(plastix_tests test_plastix.cpp test_plastix_pipeline.cpp test_alloc.cpp test_soa.cpp)
+add_executable(plastix_tests test_plastix.cpp test_plastix_pipeline.cpp test_alloc.cpp test_soa.cpp test_optim.cpp)
 target_link_libraries(plastix_tests PRIVATE plastix GTest::gtest_main)
 plastix_enable_cuda_on_target(plastix_tests)
 add_test(NAME plastix_tests COMMAND plastix_tests)
