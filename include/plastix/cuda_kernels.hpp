@@ -56,13 +56,14 @@ __global__ void ForwardUnitApplyKernel(size_t Begin, size_t End, UnitAlloc U,
 
 // Pipeline forward via per-unit reduction over the reverse-adjacency CSR: one
 // block per unit, shared-memory tree reduce (no atomicAdd contention on high
-// in-degree units). FP::Map must return float (Combine == +); blockDim.x == 256.
+// in-degree units). FP::Map must return float (Combine == +); blockDim.x ==
+// 256.
 template <typename FP, typename UnitAlloc, typename ConnAlloc, typename Globals>
-__global__ void
-ForwardPerUnitReduceKernel(size_t NumInput, size_t NumUnits,
-                           const std::uint32_t *Offsets,
-                           const std::uint32_t *Incoming, UnitAlloc U,
-                           ConnAlloc C, Globals *G) {
+__global__ void ForwardPerUnitReduceKernel(size_t NumInput, size_t NumUnits,
+                                           const std::uint32_t *Offsets,
+                                           const std::uint32_t *Incoming,
+                                           UnitAlloc U, ConnAlloc C,
+                                           Globals *G) {
   size_t Unit = NumInput + blockIdx.x;
   if (Unit >= NumUnits)
     return;

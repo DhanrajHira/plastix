@@ -134,8 +134,10 @@ public:
     }
     if constexpr (Traits::ReverseAdjForward) {
 #ifdef PLASTIX_HAS_CUDA
-      if (RevOffsets) PLASTIX_CUDA_CHECK(cudaFree(RevOffsets));
-      if (RevIncoming) PLASTIX_CUDA_CHECK(cudaFree(RevIncoming));
+      if (RevOffsets)
+        PLASTIX_CUDA_CHECK(cudaFree(RevOffsets));
+      if (RevIncoming)
+        PLASTIX_CUDA_CHECK(cudaFree(RevIncoming));
 #else
       delete[] RevOffsets;
       delete[] RevIncoming;

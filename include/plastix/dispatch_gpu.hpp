@@ -92,9 +92,9 @@ inline void DoForwardReverseAdj(UA &UnitAlloc, CA &ConnAlloc, Globals *G,
   if (NumUnits > NumInput) {
     constexpr unsigned RedBlock = 256; // must match the kernel's __shared__ Sh
     unsigned Grid = static_cast<unsigned>(NumUnits - NumInput);
-    cuda::ForwardPerUnitReduceKernel<FP><<<Grid, RedBlock>>>(
-        NumInput, NumUnits, Offsets, Incoming, UnitAlloc.view(),
-        ConnAlloc.view(), G);
+    cuda::ForwardPerUnitReduceKernel<FP>
+        <<<Grid, RedBlock>>>(NumInput, NumUnits, Offsets, Incoming,
+                             UnitAlloc.view(), ConnAlloc.view(), G);
     PLASTIX_CUDA_CHECK_KERNEL();
     unsigned Block = cuda::DefaultBlockSize;
     unsigned AGrid =

@@ -41,8 +41,8 @@ PLASTIX_HD void WarpAtomicAdd(float &Dst, float Val) {
 // single atomicAdd is issued per group. This makes a per-edge scatter into a
 // per-unit accumulator both full-GPU parallel (one thread per edge) AND
 // contention-free even when one unit has a huge in-degree (e.g. one output fed
-// by a million inputs -- every lane in a warp shares its Key, so it collapses to
-// one atomic per warp). Caller must ensure &Dst is the same for equal Keys.
+// by a million inputs -- every lane in a warp shares its Key, so it collapses
+// to one atomic per warp). Caller must ensure &Dst is the same for equal Keys.
 template <typename KeyT>
 PLASTIX_HD void WarpAtomicAddKeyed(float &Dst, float Val, KeyT Key) {
 #ifdef __CUDA_ARCH__

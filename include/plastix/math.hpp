@@ -22,18 +22,18 @@ PLASTIX_HD float LinearGrad(float /*X*/) { return 1.0f; }
 
 PLASTIX_HD float ReLU(float X) { return X > 0.0f ? X : 0.0f; }
 
-PLASTIX_HD float ReLUGradFromActivation(float A) { return A > 0.0f ? 1.0f : 0.0f; }
+PLASTIX_HD float ReLUGradFromActivation(float A) {
+  return A > 0.0f ? 1.0f : 0.0f;
+}
 
-PLASTIX_HD float ReLUGradFromPreact(float Z) {  return Z > 0.0f ? 1.0f : 0.0f; }
+PLASTIX_HD float ReLUGradFromPreact(float Z) { return Z > 0.0f ? 1.0f : 0.0f; }
 // ---------------------------------------------------------------------------
 // Sigmoid
 // ---------------------------------------------------------------------------
 
 PLASTIX_HD float Sigmoid(float X) { return 1.0f / (1.0f + std::exp(-X)); }
 
-PLASTIX_HD float SigmoidGradFromActivation(float A) {
-  return A * (1.0f - A);
-}
+PLASTIX_HD float SigmoidGradFromActivation(float A) { return A * (1.0f - A); }
 
 PLASTIX_HD float SigmoidGradFromPreact(float Z) {
   float A = Sigmoid(Z);

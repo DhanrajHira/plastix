@@ -344,7 +344,8 @@ inline bool DoAddConnections(UA &UnitAlloc, CA &ConnAlloc, KA &KahnAlloc,
           // index (not scan) a pseudo-random candidate in [Bbegin, Bend)
           uint64_t H = Mix(GrowSeed ^ (static_cast<uint64_t>(U) << 20) ^
                            (static_cast<uint64_t>(Lb) << 8) ^ S);
-          TryPair(La, Lb, U, UnitsByLevel[Bbegin + static_cast<uint32_t>(H % BCount)]);
+          TryPair(La, Lb, U,
+                  UnitsByLevel[Bbegin + static_cast<uint32_t>(H % BCount)]);
         }
       }
     }
@@ -391,7 +392,8 @@ inline bool DoAddConnections(UA &UnitAlloc, CA &ConnAlloc, KA &KahnAlloc,
   } else {
     // Sampled path: skip the O(P log P) sort+dedup and commit inline in O(P).
     // Sampling makes duplicate proposals rare, and a duplicate is a harmless
-    // parallel edge under the SoA representation -- keeping the add phase O(N*k).
+    // parallel edge under the SoA representation -- keeping the add phase
+    // O(N*k).
     for (size_t I = 0; I < NumProposals; ++I)
       Commit(Props[I].From(), Props[I].To());
   }

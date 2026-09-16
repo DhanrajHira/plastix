@@ -4,13 +4,14 @@
 // Host+device RNG for network policies.
 //
 // Structural policies (AddUnit / AddConn / InitUnit) historically reached for
-// std::mt19937, which is host-only and stateful -- it cannot run inside a kernel
-// and a single shared generator races across threads. To let those policies run
-// on-device, use this instead: a stateless, counter-based (SplitMix64) RNG that
-// is seeded per *draw site* from (base_seed, key) where `key` is something
-// stable and unique per invocation -- typically the unit id mixed with the step
-// counter. Each thread constructs its own generator, so there is no shared
-// state and the stream is deterministic and reproducible across host/device.
+// std::mt19937, which is host-only and stateful -- it cannot run inside a
+// kernel and a single shared generator races across threads. To let those
+// policies run on-device, use this instead: a stateless, counter-based
+// (SplitMix64) RNG that is seeded per *draw site* from (base_seed, key) where
+// `key` is something stable and unique per invocation -- typically the unit id
+// mixed with the step counter. Each thread constructs its own generator, so
+// there is no shared state and the stream is deterministic and reproducible
+// across host/device.
 //
 // Usage in a policy:
 //   plastix::DeviceRng R(G.RngSeed, plastix::MixKey(Id, G.Step));

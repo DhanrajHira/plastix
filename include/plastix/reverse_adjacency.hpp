@@ -37,10 +37,10 @@ namespace plastix {
 // written into Incoming. Host function; the arrays it fills can live in managed
 // memory for device consumption.
 template <typename CA>
-inline std::size_t BuildReverseAdjacency(const CA &ConnAlloc, std::size_t NumUnits,
-                                         std::uint32_t *Offsets,
-                                         std::uint32_t *Incoming,
-                                         std::uint32_t *WritePos) {
+inline std::size_t
+BuildReverseAdjacency(const CA &ConnAlloc, std::size_t NumUnits,
+                      std::uint32_t *Offsets, std::uint32_t *Incoming,
+                      std::uint32_t *WritePos) {
   const std::size_t NumConns = ConnAlloc.Size();
   for (std::size_t U = 0; U <= NumUnits; ++U)
     Offsets[U] = 0;
