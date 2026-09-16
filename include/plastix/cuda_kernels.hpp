@@ -51,6 +51,40 @@ __global__ void ForwardUnitApplyKernel(size_t Begin, size_t End, UnitAlloc U,
   UAcc = Acc{};
 }
 
+// Pipeline forward via per-unit reduction over the reverse-adjacency CSR: one
+// block per unit, shared-memory tree reduce (no atomicAdd contention on high
+// in-degree units). FP::Map must return float (Combine == +); blockDim.x == 256.
+template <typename FP, typename UnitAlloc, typename ConnAlloc, typename Globals>
+__global__ void
+ForwardPerUnitReduceKernel(size_t NumInput, size_t NumUnits,
+                           const std::uint32_t *Offsets,
+                           const std::uint32_t *Incoming, UnitAlloc U,
+                           ConnAlloc C, Globals *G) {
+  size_t Unit = NumInput + blockIdx.x;
+  if (Unit >= NumUnits)
+    return;
+  std::uint32_t Begin = Offsets[Unit];
+  std::uint32_t End = Offsets[Unit + 1];
+  float Acc = 0.0f;
+  for (std::uint32_t K = Begin + threadIdx.x; K < End; K += blockDim.x) {
+    std::uint32_t Ci = Incoming[K];
+    if (GetField<DeadTag>(C, Ci))
+      continue;
+    auto FromId = GetField<FromIdTag>(C, Ci);
+    Acc += FP::Map(U, Unit, FromId, C, Ci, *G);
+  }
+  __shared__ float Sh[256];
+  Sh[threadIdx.x] = Acc;
+  __syncthreads();
+  for (unsigned O = blockDim.x / 2; O > 0; O >>= 1) {
+    if (threadIdx.x < O)
+      Sh[threadIdx.x] += Sh[threadIdx.x + O];
+    __syncthreads();
+  }
+  if (threadIdx.x == 0)
+    GetForwardAcc(U, Unit) = Sh[0];
+}
+
 // Forward pass -- Topological propagation: as Pipeline but conn-sweep limited
 // to the level's [Begin,End). Unit-apply filters by level via GetLevel() (could
 // be removed by partitioning units at sort time).
