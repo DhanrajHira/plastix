@@ -291,7 +291,7 @@ static void RegisterAll() {
       {256, 256},   {1024, 1024}, {4096, 4096},
       {4096, 1024}, {8192, 64},   {64, 8192},
   };
-  // Coarse pass found crossover in the 1–20 % band for every shape we tested.
+  // Coarse pass found crossover in the 1-20 % band for every shape we tested.
   // Refine inside that band; keep the outer points so the curve has shape.
   // Basis points: 1 bp = 0.01 %.
   const std::vector<int64_t> Densities = {10,   100,  200,  500,  1000, 1500,

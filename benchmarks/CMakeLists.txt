@@ -19,7 +19,7 @@ function(plastix_bench_target tgt)
 endfunction()
 
 # ---------------------------------------------------------------------------
-# SpMV / GEMV crossover benchmark — Plastix vs Eigen / OpenBLAS / hand-rolled.
+# SpMV / GEMV crossover benchmark -- Plastix vs Eigen / OpenBLAS / hand-rolled.
 # Pulled in via system packages (Arch: eigen + openblas).
 # ---------------------------------------------------------------------------
 
@@ -118,7 +118,7 @@ target_compile_options(bench_time_to_quality PRIVATE -O3 -march=native)
 plastix_bench_target(bench_time_to_quality)
 
 # ---------------------------------------------------------------------------
-# LibTorch (CPU). Pulled via FetchContent — the prebuilt CXX11-ABI release
+# LibTorch (CPU). Pulled via FetchContent -- the prebuilt CXX11-ABI release
 # zip is ~200 MB and only downloaded the first time CMake configures. Set
 # PLASTIX_BENCH_FETCH_LIBTORCH=OFF to skip every torch-dependent bench.
 # Set PLASTIX_LIBTORCH_URL to point at a local copy of the zip if the

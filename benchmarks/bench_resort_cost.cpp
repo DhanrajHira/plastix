@@ -1,12 +1,12 @@
 // Topology-resort cost microbenchmark.
 //
 // SortConnectionsByLevel + RecomputeLevels run inside DoForwardPass
-// whenever the network's NeedsResort flag is set — flipped by
+// whenever the network's NeedsResort flag is set -- flipped by
 // DoAddConnections (on commit) or DoCompactConnections in the
 // Topological model. The cost dominates the structural phase in several
 // of the dynamic benches in `traditional/_results/runs.csv` (the
 // `structural_ns_mean` column in 09_imprintin_learner is 4.5 ms on
-// average — that is the resort).
+// average -- that is the resort).
 //
 // SortConnectionsByLevel is private inside plastix::Network, so we
 // expose its cost indirectly with three timed measurements:
@@ -52,7 +52,7 @@ namespace {
 
 // Identity activation + the bare minimum policies needed for
 // DoCompactConnections to be enabled (NetworkShrinks && HasConnAdd).
-// The policies don't have to do anything useful — they just have to be
+// The policies don't have to do anything useful -- they just have to be
 // non-No* so the static gates open.
 
 struct IdentityFwd {
@@ -168,7 +168,7 @@ void AnnotateCounters(benchmark::State &S, const Args &A, size_t Nnz,
 std::unique_ptr<ResortNet> BuildDeepNet(const Args &A, size_t *NnzOut) {
   if (NnzOut)
     *NnzOut = 0;
-  // RandomSparseLayer's NnzOut argument expects a pointer — we accumulate
+  // RandomSparseLayer's NnzOut argument expects a pointer -- we accumulate
   // through it across all layers by using the same pointer everywhere.
   // Workaround: capture in a vector of builders and feed the same ptr.
   // SparseLinearLayer adds to *NnzOut on construction-time call.
@@ -247,7 +247,7 @@ void BM_CompactOnly(benchmark::State &S) {
   auto A = ParseArgs(S);
   size_t Nnz = 0;
   auto Net = BuildDeepNet(A, &Nnz);
-  // No DeadTag set anywhere — DoCompactConnections will scan every
+  // No DeadTag set anywhere -- DoCompactConnections will scan every
   // connection once, find zero dead, and bail before Gather.
   for (auto _ : S) {
     Net->DoCompactConnections();

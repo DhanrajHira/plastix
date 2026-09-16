@@ -104,7 +104,7 @@ size_t AnalyticalLiveBytes(size_t Units, size_t Conns) {
 
 // ---------------------------------------------------------------------------
 // Layer builder. Same deterministic mask as bench_spmv_crossover so the
-// connection counts are reproducible and density_bps → nnz translates
+// connection counts are reproducible and density_bps -> nnz translates
 // exactly across files.
 // ---------------------------------------------------------------------------
 
@@ -339,8 +339,8 @@ void Validate() {
   size_t AnalyticalLive = AnalyticalLiveBytes(M.Units, M.Conns);
   // The measured RSS includes the dispatcher's per-level Ranges,
   // KahnAlloc scratch (UnitCapacity slots), and proposal arena. For a
-  // 64x64 / d=0.5 network the live nnz is ~2K and analytical_live ≈
-  // 64KB; KahnAlloc scratch alone is UnitCapacity*16B≈1MB. Use a
+  // 64x64 / d=0.5 network the live nnz is ~2K and analytical_live ~=
+  // 64KB; KahnAlloc scratch alone is UnitCapacity*16B~=1MB. Use a
   // looser absolute floor and require the order of magnitude is sane.
   if (M.RssDeltaKb < 0)
     Die("RSS reading failed (/proc/self/status)");

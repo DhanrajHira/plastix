@@ -14,7 +14,7 @@
 //   build-cuda/benchmarks/bench_spmv_crossover_gpu --benchmark_format=csv \
 //       --benchmark_out=spmv_gpu.csv
 //
-// Args per benchmark: (In, Out, density_bps) — identical to the CPU file.
+// Args per benchmark: (In, Out, density_bps) -- identical to the CPU file.
 
 #include <benchmark/benchmark.h>
 
@@ -230,7 +230,7 @@ static void BM_Plastix(benchmark::State &S) {
 }
 
 // ---------------------------------------------------------------------------
-// cuBLAS sgemv on the dense W. Row-major source data — cuBLAS is column-major,
+// cuBLAS sgemv on the dense W. Row-major source data -- cuBLAS is column-major,
 // so we pass W as A^T with CUBLAS_OP_T and dimensions (In, Out).
 // ---------------------------------------------------------------------------
 

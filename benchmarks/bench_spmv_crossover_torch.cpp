@@ -33,7 +33,7 @@ using bench_common::RandomVector;
 using bench_common::kInputSeed;
 
 // ---------------------------------------------------------------------------
-// Plastix configuration — must match bench_spmv_crossover.cpp so the two
+// Plastix configuration -- must match bench_spmv_crossover.cpp so the two
 // CSVs can be merged later without re-running the Plastix sweep.
 // ---------------------------------------------------------------------------
 
@@ -264,7 +264,7 @@ static void BM_TorchSparseCsr(benchmark::State &S) {
 }
 
 // ---------------------------------------------------------------------------
-// Correctness check. Tiny case (In=8, Out=4, density=0.5) — same as the
+// Correctness check. Tiny case (In=8, Out=4, density=0.5) -- same as the
 // non-torch crossover bench. All three kernels must match the closed-form
 // y = W x to 1e-4 before we time anything.
 // ---------------------------------------------------------------------------
