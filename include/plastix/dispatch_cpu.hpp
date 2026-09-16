@@ -391,7 +391,7 @@ inline bool DoAddConnections(UA &UnitAlloc, CA &ConnAlloc, KA &KahnAlloc,
   } else {
     // Sampled path: skip the O(P log P) sort+dedup and commit inline in O(P).
     // Sampling makes duplicate proposals rare, and a duplicate is a harmless
-    // parallel edge under the SoA representation — keeping the add phase O(N*k).
+    // parallel edge under the SoA representation -- keeping the add phase O(N*k).
     for (size_t I = 0; I < NumProposals; ++I)
       Commit(Props[I].From(), Props[I].To());
   }

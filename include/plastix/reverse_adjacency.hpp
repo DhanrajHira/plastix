@@ -3,12 +3,12 @@
 
 // Reverse-adjacency (incoming-edge) index over the connection allocator.
 //
-// The connection allocator stores edges keyed by (FromId, ToId) — convenient
+// The connection allocator stores edges keyed by (FromId, ToId) -- convenient
 // for the per-edge forward/backward sweeps, but it gives no direct way to ask
 // "which connections feed unit u?". That question is what you need to:
 //   * run the forward/backward *per unit* (one thread reduces over a unit's
 //     incoming edges) instead of per edge with atomicAdd into a shared
-//     accumulator — which in turn lets a policy use a non-scalar Accumulator
+//     accumulator -- which in turn lets a policy use a non-scalar Accumulator
 //     (e.g. the imprinting learner's {Activation, NumConns}) on-device; and
 //   * drive structural growth per unit without an O(N^2) all-pairs scan.
 //

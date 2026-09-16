@@ -349,7 +349,7 @@ public:
     DoCompactConnections();
     DoAddUnits();
     // Skip the O(N^2) proposal sweep when this step added no units and no
-    // densifier is active — new edges only appear at freshly generated units
+    // densifier is active -- new edges only appear at freshly generated units
     // (unit-driven growth), or under bounded-fanout densification exposed by
     // GlobalState::GrowFanout. A direct DoAddConnections() call outside DoStep
     // always sweeps: an explicit caller has, by construction, a reason to.
