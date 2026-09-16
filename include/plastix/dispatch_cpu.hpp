@@ -286,30 +286,65 @@ inline bool DoAddConnections(UA &UnitAlloc, CA &ConnAlloc, KA &KahnAlloc,
   size_t NumProposals = 0;
   size_t MaxProposals = ProposalAlloc.GetCapacity();
 
+  // Optional bounded-fanout growth: if GlobalState exposes GrowFanout=k>0,
+  // sample k candidates per source (RigL-style, Evci et al. ICML 2020),
+  // turning the add phase from O(N^2) to O(N*k). Zero preserves all-pairs.
+  uint32_t GrowK = 0;
+  uint64_t GrowSeed = 0;
+  if constexpr (requires { G->GrowFanout; })
+    GrowK = static_cast<uint32_t>(G->GrowFanout);
+  if constexpr (requires { G->GrowSeed; })
+    GrowSeed = static_cast<uint64_t>(G->GrowSeed);
+  // Vary the sampled set across calls without host-mutable state (live edge
+  // count changes as a churn loop prunes/grows).
+  GrowSeed ^= static_cast<uint64_t>(ConnAlloc.Size()) * 0x9E3779B97F4A7C15ull;
+  auto Mix = [](uint64_t X) { // splitmix64 finalizer
+    X += 0x9E3779B97F4A7C15ull;
+    X = (X ^ (X >> 30)) * 0xBF58476D1CE4E5B9ull;
+    X = (X ^ (X >> 27)) * 0x94D049BB133111EBull;
+    return X ^ (X >> 31);
+  };
+
+  // Emit up to four proposals for an ordered level-pair; shared by the
+  // exhaustive and sampled paths so their semantics stay identical.
+  auto TryPair = [&](uint16_t La, uint16_t Lb, uint32_t U, uint32_t V) {
+    if (U == V)
+      return;
+    if (NumProposals < MaxProposals &&
+        AC::ShouldAddIncomingConnection(UnitAlloc, U, V, *G))
+      Props[NumProposals++] = {V, U};
+    if (NumProposals < MaxProposals &&
+        AC::ShouldAddOutgoingConnection(UnitAlloc, U, V, *G))
+      Props[NumProposals++] = {U, V};
+    if (La != Lb) {
+      if (NumProposals < MaxProposals &&
+          AC::ShouldAddIncomingConnection(UnitAlloc, V, U, *G))
+        Props[NumProposals++] = {U, V};
+      if (NumProposals < MaxProposals &&
+          AC::ShouldAddOutgoingConnection(UnitAlloc, V, U, *G))
+        Props[NumProposals++] = {V, U};
+    }
+  };
+
   // Process one level-pair (La <= Lb); cross-level pairs query both
   // (U,V) and (V,U) to match all-pairs semantics.
   auto ProcessLevelPair = [&](uint16_t La, uint16_t Lb) {
+    const uint32_t Bbegin = LevelOffset[Lb], Bend = LevelOffset[Lb + 1];
+    const uint32_t BCount = Bend - Bbegin;
+    if (BCount == 0)
+      return;
     for (uint32_t Ai = LevelOffset[La]; Ai < LevelOffset[La + 1]; ++Ai) {
       uint32_t U = UnitsByLevel[Ai];
-      for (uint32_t Bi = LevelOffset[Lb]; Bi < LevelOffset[Lb + 1]; ++Bi) {
-        uint32_t V = UnitsByLevel[Bi];
-        if (U == V)
-          continue;
-
-        if (NumProposals < MaxProposals &&
-            AC::ShouldAddIncomingConnection(UnitAlloc, U, V, *G))
-          Props[NumProposals++] = {V, U};
-        if (NumProposals < MaxProposals &&
-            AC::ShouldAddOutgoingConnection(UnitAlloc, U, V, *G))
-          Props[NumProposals++] = {U, V};
-
-        if (La != Lb) {
-          if (NumProposals < MaxProposals &&
-              AC::ShouldAddIncomingConnection(UnitAlloc, V, U, *G))
-            Props[NumProposals++] = {U, V};
-          if (NumProposals < MaxProposals &&
-              AC::ShouldAddOutgoingConnection(UnitAlloc, V, U, *G))
-            Props[NumProposals++] = {V, U};
+      if (GrowK == 0) {
+        for (uint32_t Bi = Bbegin; Bi < Bend; ++Bi)
+          TryPair(La, Lb, U, UnitsByLevel[Bi]);
+      } else {
+        for (uint32_t S = 0; S < GrowK && NumProposals + 4 <= MaxProposals;
+             ++S) {
+          // index (not scan) a pseudo-random candidate in [Bbegin, Bend)
+          uint64_t H = Mix(GrowSeed ^ (static_cast<uint64_t>(U) << 20) ^
+                           (static_cast<uint64_t>(Lb) << 8) ^ S);
+          TryPair(La, Lb, U, UnitsByLevel[Bbegin + static_cast<uint32_t>(H % BCount)]);
         }
       }
     }
@@ -331,26 +366,34 @@ inline bool DoAddConnections(UA &UnitAlloc, CA &ConnAlloc, KA &KahnAlloc,
   if (NumProposals == 0)
     return false;
 
-  // Phase 2: sort packed (From, To) bits ascending. Pure host sort --
-  // KernelizeAdd=true callers go through the GPU dispatcher instead.
-  std::sort(Props, Props + NumProposals,
-            [](const auto &A, const auto &B) { return A.Bits < B.Bits; });
-
-  // Phase 3: commit unique proposals.
   size_t SizeBefore = ConnAlloc.Size();
-  uint64_t Prev = UINT64_MAX;
-  for (size_t I = 0; I < NumProposals; ++I) {
-    if (Props[I].Bits == Prev)
-      continue;
-    Prev = Props[I].Bits;
 
-    uint32_t F = Props[I].From();
-    uint32_t T = Props[I].To();
+  auto Commit = [&](uint32_t F, uint32_t T) {
     auto ConnId = ConnAlloc.Allocate();
     GetField<FromIdTag>(ConnAlloc, ConnId) = F;
     GetField<ToIdTag>(ConnAlloc, ConnId) = T;
     GetField<SrcLevelTag>(ConnAlloc, ConnId) = GetLevel(UnitAlloc, F);
     AC::InitConnection(UnitAlloc, F, T, ConnAlloc, ConnId, *G);
+  };
+
+  if (GrowK == 0) {
+    // Exhaustive path: the all-pairs enumeration can emit the same (F,T) from
+    // multiple perspectives, so sort the packed keys and commit uniques.
+    std::sort(Props, Props + NumProposals,
+              [](const auto &A, const auto &B) { return A.Bits < B.Bits; });
+    uint64_t Prev = UINT64_MAX;
+    for (size_t I = 0; I < NumProposals; ++I) {
+      if (Props[I].Bits == Prev)
+        continue;
+      Prev = Props[I].Bits;
+      Commit(Props[I].From(), Props[I].To());
+    }
+  } else {
+    // Sampled path: skip the O(P log P) sort+dedup and commit inline in O(P).
+    // Sampling makes duplicate proposals rare, and a duplicate is a harmless
+    // parallel edge under the SoA representation — keeping the add phase O(N*k).
+    for (size_t I = 0; I < NumProposals; ++I)
+      Commit(Props[I].From(), Props[I].To());
   }
 
   return ConnAlloc.Size() > SizeBefore;

@@ -327,7 +327,13 @@ public:
       // DoAddUnits added nothing, the O(N^2) proposal sweep has no candidates,
       // so skip it. Assumes connection growth follows unit growth — networks
       // that densify pre-existing units independently must not rely on this.
-      if (UnitsAddedLastStep == 0)
+      // The bounded-fanout densification mode (GlobalState::GrowFanout > 0,
+      // handled by the sampled O(N*k) path) is exactly such a case, so it opts
+      // out of the early-out.
+      bool Densify = false;
+      if constexpr (requires { Globals->GrowFanout; })
+        Densify = Globals->GrowFanout > 0;
+      if (UnitsAddedLastStep == 0 && !Densify)
         return;
       bool Committed;
       if constexpr (HasCuda && Traits::KernelizeAdd)
@@ -370,6 +376,14 @@ public:
 
   auto &GetConnAlloc() { return ConnAlloc; }
   auto &GetUnitAlloc() { return UnitAlloc; }
+
+  // Host access to the single live GlobalState. Benchmarks/examples stage
+  // runtime policy parameters here (learning rate, prune/add arming, budgets)
+  // between Do* phases. Globals lives in unified memory (CUDA) or on the heap
+  // (CPU), so this is directly host-addressable; a CUDA caller mutating it must
+  // still order the write before the kernels that read it.
+  GlobalState &Global() { return *Globals; }
+  const GlobalState &Global() const { return *Globals; }
 
 private:
   void RecomputeLevels() {
