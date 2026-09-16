@@ -203,6 +203,26 @@ inline void DoPruneConnections(UA &UnitAlloc, CA &ConnAlloc, Globals *G) {
   }
 }
 
+// Compaction: reclaim tombstoned (DeadTag) connection slots by gathering the
+// live entries into a contiguous prefix, then shrinking the count.
+template <typename CA> inline void DoCompactConnections(CA &ConnAlloc) {
+  size_t N = ConnAlloc.Size();
+  if (N == 0)
+    return;
+
+  size_t *Perm = ConnAlloc.PermutationScratch();
+  size_t NumLive = 0;
+  for (size_t C = 0; C < N; ++C)
+    if (!GetField<DeadTag>(ConnAlloc, C))
+      Perm[NumLive++] = C;
+
+  if (NumLive == N)
+    return;
+
+  ConnAlloc.Gather(NumLive);
+  ConnAlloc.SetCount(NumLive);
+}
+
 // Add phases
 
 template <typename AP, typename UA, typename Globals>

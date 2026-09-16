@@ -180,6 +180,9 @@ public:
   PLASTIX_HD size_t Size() const { return CountPtr->load(); }
   PLASTIX_HD size_t GetCapacity() const { return Capacity; }
 
+  // Overwrite the live count (used by compaction after Gather).
+  PLASTIX_HD void SetCount(size_t NewCount) { CountPtr->store(NewCount); }
+
   PLASTIX_HD size_t *PermutationScratch() { return PermScratch; }
 
   void Gather(size_t N) {
@@ -304,6 +307,7 @@ public:
   }
 
   PLASTIX_HD size_t Size() const { return View.Size(); }
+  PLASTIX_HD void SetCount(size_t NewCount) { View.SetCount(NewCount); }
   PLASTIX_HD size_t GetCapacity() const { return View.GetCapacity(); }
   PLASTIX_HD size_t *PermutationScratch() { return View.PermutationScratch(); }
   void Gather(size_t N) { View.Gather(N); }
