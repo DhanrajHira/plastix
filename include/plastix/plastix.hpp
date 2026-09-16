@@ -322,19 +322,6 @@ public:
     else {
       using AC = typename Traits::AddConn;
       constexpr uint16_t N = Traits::Neighbourhood;
-      // Early-out: new connections are only ever proposed to wire units added
-      // this step (a freshly generated unit's incoming/outgoing edges). When
-      // DoAddUnits added nothing, the O(N^2) proposal sweep has no candidates,
-      // so skip it. Assumes connection growth follows unit growth — networks
-      // that densify pre-existing units independently must not rely on this.
-      // The bounded-fanout densification mode (GlobalState::GrowFanout > 0,
-      // handled by the sampled O(N*k) path) is exactly such a case, so it opts
-      // out of the early-out.
-      bool Densify = false;
-      if constexpr (requires { Globals->GrowFanout; })
-        Densify = Globals->GrowFanout > 0;
-      if (UnitsAddedLastStep == 0 && !Densify)
-        return;
       bool Committed;
       if constexpr (HasCuda && Traits::KernelizeAdd)
         Committed = gpu::DoAddConnections<AC>(UnitAlloc, ConnAlloc,
@@ -361,7 +348,18 @@ public:
     DoPruneConnections();
     DoCompactConnections();
     DoAddUnits();
-    DoAddConnections();
+    // Skip the O(N^2) proposal sweep when this step added no units and no
+    // densifier is active — new edges only appear at freshly generated units
+    // (unit-driven growth), or under bounded-fanout densification exposed by
+    // GlobalState::GrowFanout. A direct DoAddConnections() call outside DoStep
+    // always sweeps: an explicit caller has, by construction, a reason to.
+    if constexpr (!std::is_same_v<typename Traits::AddConn, NoAddConn>) {
+      bool Densify = false;
+      if constexpr (requires { Globals->GrowFanout; })
+        Densify = Globals->GrowFanout > 0;
+      if (UnitsAddedLastStep > 0 || Densify)
+        DoAddConnections();
+    }
     if constexpr (Traits::Model == Propagation::Topological) {
       if (NeedsResort)
         SortConnectionsByLevel();
