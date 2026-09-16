@@ -1,16 +1,9 @@
 #ifndef PLASTIX_DISPATCH_GPU_HPP
 #define PLASTIX_DISPATCH_GPU_HPP
 
-// GPU launchers -- one free template per phase, mirroring the host paths
-// in `dispatch_cpu.hpp`. The function declarations are visible in every
-// build so the qualified-name lookup in `if constexpr` branches at the
-// dispatch site succeeds; the bodies are guarded by PLASTIX_HAS_CUDA so
-// the `<<<>>>` launch syntax and `cuda::` references only have to exist
-// when nvcc is doing the parse.
-//
-// In host builds the bodies are empty stubs -- they are never instantiated
-// (the dispatch site discards them with `if constexpr (HasCuda && ...)`),
-// so no codegen happens and the unused parameters produce no warnings.
+// GPU launchers mirroring dispatch_cpu.hpp; always declared so dispatch-site
+// `if constexpr` lookup resolves, bodies guarded by PLASTIX_HAS_CUDA (host
+// stubs).
 
 #include "plastix/conn.hpp"
 #include "plastix/macros.hpp"
@@ -34,9 +27,7 @@ namespace gpu {
 
 #ifdef PLASTIX_HAS_CUDA
 
-// ---------------------------------------------------------------------------
 // Forward pass -- Topological propagation
-// ---------------------------------------------------------------------------
 
 template <typename FP, typename UA, typename CA, typename Globals,
           typename RangesT>
@@ -66,9 +57,7 @@ inline void DoForwardTopological(UA &UnitAlloc, CA &ConnAlloc, Globals *G,
   PLASTIX_CUDA_CHECK(cudaDeviceSynchronize());
 }
 
-// ---------------------------------------------------------------------------
 // Forward pass -- Pipeline propagation
-// ---------------------------------------------------------------------------
 
 template <typename FP, typename UA, typename CA, typename Globals>
 inline void DoForwardPipeline(UA &UnitAlloc, CA &ConnAlloc, Globals *G,
@@ -93,9 +82,7 @@ inline void DoForwardPipeline(UA &UnitAlloc, CA &ConnAlloc, Globals *G,
   PLASTIX_CUDA_CHECK(cudaDeviceSynchronize());
 }
 
-// ---------------------------------------------------------------------------
 // Backward pass -- Topological propagation
-// ---------------------------------------------------------------------------
 
 template <typename BP, typename UA, typename CA, typename Globals,
           typename RangesT>
@@ -125,9 +112,7 @@ inline void DoBackwardTopological(UA &UnitAlloc, CA &ConnAlloc, Globals *G,
   PLASTIX_CUDA_CHECK(cudaDeviceSynchronize());
 }
 
-// ---------------------------------------------------------------------------
 // Backward pass -- Pipeline propagation
-// ---------------------------------------------------------------------------
 
 template <typename BP, typename UA, typename CA, typename Globals>
 inline void DoBackwardPipeline(UA &UnitAlloc, CA &ConnAlloc, Globals *G,
@@ -151,9 +136,7 @@ inline void DoBackwardPipeline(UA &UnitAlloc, CA &ConnAlloc, Globals *G,
   PLASTIX_CUDA_CHECK(cudaDeviceSynchronize());
 }
 
-// ---------------------------------------------------------------------------
 // Per-unit / per-connection update phases
-// ---------------------------------------------------------------------------
 
 template <typename UP, typename UA, typename Globals>
 inline void DoUpdateUnit(UA &UnitAlloc, Globals *G) {
@@ -184,9 +167,7 @@ inline void DoUpdateConn(UA &UnitAlloc, CA &ConnAlloc, Globals *G) {
   PLASTIX_CUDA_CHECK(cudaDeviceSynchronize());
 }
 
-// ---------------------------------------------------------------------------
 // Prune phases
-// ---------------------------------------------------------------------------
 
 template <typename PP, typename UA, typename Globals>
 inline void DoPruneUnits(UA &UnitAlloc, Globals *G) {
@@ -214,9 +195,7 @@ inline void DoPruneConnections(UA &UnitAlloc, CA &ConnAlloc, Globals *G) {
   PLASTIX_CUDA_CHECK(cudaDeviceSynchronize());
 }
 
-// ---------------------------------------------------------------------------
 // Add phases
-// ---------------------------------------------------------------------------
 
 template <typename AP, typename UA, typename Globals>
 inline void DoAddUnits(UA &UnitAlloc, Globals *G, uint16_t MaxLvl) {
@@ -231,10 +210,8 @@ inline void DoAddUnits(UA &UnitAlloc, Globals *G, uint16_t MaxLvl) {
   PLASTIX_CUDA_CHECK(cudaDeviceSynchronize());
 }
 
-// AddConnections runs the entire 3-phase proposal pipeline on device:
-// Phase 1 (per-(U,V) collection), Phase 2 (radix sort of packed keys),
-// Phase 3 (dedup-flag -> exclusive scan -> AllocateMany -> commit). Returns
-// true if any new connections were committed (caller flips NeedsResort).
+// Device add-conn 3-phase pipeline: collect, radix-sort packed keys,
+// dedup-scan-commit. True if any committed (caller flips NeedsResort).
 template <typename AC, typename UA, typename CA, typename PA, typename Globals>
 inline bool DoAddConnections(UA &UnitAlloc, CA &ConnAlloc, PA &ProposalAlloc,
                              Globals *G, uint16_t Neighbourhood) {
@@ -300,9 +277,7 @@ inline bool DoAddConnections(UA &UnitAlloc, CA &ConnAlloc, PA &ProposalAlloc,
   return Committed;
 }
 
-// ---------------------------------------------------------------------------
 // Topology rebuild -- level-parallel Kahn's algorithm on device
-// ---------------------------------------------------------------------------
 
 template <typename UA, typename CA, typename KA>
 inline void RecomputeLevels(UA &UnitAlloc, CA &ConnAlloc, KA &KahnAlloc,
@@ -380,10 +355,8 @@ inline void RecomputeLevels(UA &UnitAlloc, CA &ConnAlloc, KA &KahnAlloc,
 
 #else // !PLASTIX_HAS_CUDA
 
-// Host-build stubs: declared with the same signatures so the qualified-
-// name lookup at the dispatch site succeeds. Never instantiated because
-// the dispatch site discards the call with `if constexpr (HasCuda && ...)`,
-// so empty bodies don't generate code or warn about unused parameters.
+// Host-build stubs: same signatures so dispatch-site lookup resolves;
+// never instantiated (`if constexpr` discards), so empty bodies suffice.
 
 template <typename FP, typename UA, typename CA, typename Globals,
           typename RangesT>

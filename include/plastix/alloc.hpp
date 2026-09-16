@@ -71,17 +71,11 @@ inline void FreeStorage(void *P, size_t Bytes) {
 // Forward declaration so SoaView can befriend its owning allocator.
 template <typename T, typename... Fields> class SOAAllocator;
 
-// Non-owning, device-copyable handle over the SOA arenas. Holds only plain
-// pointers/counters and never frees them (SOAAllocator owns the storage), so it
-// is safe to pass by value into CUDA kernels: no host-only destructor rides
-// along. All per-element and device-callable operations live here; the owning
-// SOAAllocator forwards to them.
+// Non-owning, device-copyable handle over the SOA arenas: plain pointers only,
+// never frees (SOAAllocator owns storage), so it passes into kernels by value.
 //
-// TODO(plastix-gpu): FieldPtrs/BackFieldPtrs are std::tuples, which are not
-// guaranteed trivially copyable -- kernel parameters ideally are. This copies
-// on-device today under --expt-relaxed-constexpr (same as the previous
-// allocator); swap the tuples for a trivially-copyable pointer aggregate to
-// make SoaView strictly trivially copyable.
+// TODO(plastix-gpu): FieldPtrs/BackFieldPtrs are std::tuples, not guaranteed
+// trivially-copyable (kernel params ideally are); swap for a pointer aggregate.
 template <typename T, typename... Fields> class SoaView {
   std::tuple<typename Fields::Type *...> FieldPtrs{};
   std::tuple<typename Fields::Type *...> BackFieldPtrs{};
@@ -205,9 +199,9 @@ public:
   }
 };
 
-// Owning RAII allocator. Constructs the SOA arenas (mmap or cudaMallocManaged),
-// exposes a non-owning SoaView for host code and kernel launches, and frees the
-// storage on destruction. Move-only, so exactly one owner frees.
+// Owning RAII allocator: builds the SOA arenas (mmap or cudaMallocManaged),
+// exposes a non-owning SoaView, frees on destruction. Move-only (one owner
+// frees).
 template <typename T, typename... Fields> class SOAAllocator {
   SoaView<T, Fields...> View;
 
@@ -320,10 +314,9 @@ public:
 
 } // namespace alloc
 
-// Free-function shorthand for Alloc.template Get<Tag>(Id). Avoids the
-// `.template` disambiguator when the allocator is a dependent type (e.g.
-// `auto &` policy parameters) and reads a bit cleaner at call sites.
-// Const-propagates via auto& deduction.
+// Free-function shorthand for Alloc.template Get<Tag>(Id): avoids the
+// `.template` disambiguator for dependent allocator types. Const-propagates via
+// auto&.
 template <typename Tag>
 PLASTIX_HD constexpr auto &GetField(auto &Alloc, size_t Id) {
   return Alloc.template Get<Tag>(Id);

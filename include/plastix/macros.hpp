@@ -1,12 +1,9 @@
 #ifndef PLASTIX_MACROS_HPP
 #define PLASTIX_MACROS_HPP
 
-// PLASTIX_HD: marks a function as callable from both host and device code.
-//
-// NOTE: Every accessor, every default/noop policy method, and every framework
-// utility called from inside a CUDA kernel must be tagged with this. User
-// policy methods follow the same rule: a missing PLASTIX_HD shows up as a
-// link-time error when the kernel body is instantiated.
+// PLASTIX_HD: marks a function callable from both host and device code. Every
+// accessor/policy/kernel-called utility needs it, else a link error at
+// instantiation.
 #if defined(__CUDACC__)
 #define PLASTIX_HD __host__ __device__ __forceinline__
 #define PLASTIX_DEVICE __device__ __forceinline__

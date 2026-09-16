@@ -32,10 +32,8 @@ PLASTIX_HD constexpr auto &GetLevel(auto &Alloc, size_t Id) {
 // Type list for user-defined extra unit fields.
 template <typename... Fields> struct UnitFieldList {};
 
-// Unit allocator parameterized by accumulator types from policies.
-// FwdAcc, BwdAcc are the Accumulator types from the
-// ForwardPass and BackwardPass policies respectively.
-// ExtraFields... are additional SOAField<Tag, Type> entries from the user.
+// Unit allocator parameterized by policy accumulators: FwdAcc/BwdAcc from
+// Forward/BackwardPass; ExtraFields... are user SOAField<Tag, Type> entries.
 template <typename FwdAcc, typename BwdAcc, typename... ExtraFields>
 using MakeUnitAllocator =
     alloc::SOAAllocator<UnitState, alloc::SOAField<ActivationTag, float>,

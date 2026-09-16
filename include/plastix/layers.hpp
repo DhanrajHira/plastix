@@ -13,11 +13,9 @@
 
 namespace plastix {
 
-// Hand-rolled iota iterator. Replaces std::views::iota so that UnitRange::Ids()
-// is callable from device code (libstdc++'s ranges machinery is not yet
-// device-compatible) and avoids dragging <ranges> into translation units that
-// nvcc compiles. Models random_access_iterator just enough for range-for
-// loops and indexed access on both host and device.
+// Hand-rolled iota iterator: replaces std::views::iota so UnitRange::Ids()
+// works on device (libstdc++ ranges aren't device-safe) and keeps <ranges> out
+// of nvcc TUs.
 struct IotaIterator {
   using value_type = size_t;
   using difference_type = std::ptrdiff_t;
@@ -104,9 +102,9 @@ struct NoConnInit {
   PLASTIX_HD void operator()(auto &, auto) const {}
 };
 
-// Counter-based RNG initializer: draws a deterministic uniform sample keyed on
-// the connection id. Bit-identical between host and device (Philox is pure)
-// and stateless, so multiple builders sharing a seed don't interfere.
+// Counter-based RNG init: deterministic uniform sample keyed on connection id.
+// Bit-identical host/device and stateless, so builders sharing a seed don't
+// interfere.
 struct RandomUniformWeight {
   uint64_t Seed;
   float Min;

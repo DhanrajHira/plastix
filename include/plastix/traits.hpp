@@ -14,19 +14,11 @@
 
 namespace plastix {
 
-// ---------------------------------------------------------------------------
 // Propagation model
-// ---------------------------------------------------------------------------
 
 enum class Propagation { Topological, Pipeline };
 
-// ---------------------------------------------------------------------------
 // Policy concepts
-//
-// Each concept defines the interface a policy struct must satisfy. Policies
-// are pure collections of static methods — no instances are ever created.
-// Network<Traits> calls these methods directly from its Do*() methods.
-// ---------------------------------------------------------------------------
 
 template <typename P, typename UnitAlloc, typename ConnAlloc, typename Global>
 concept PassPolicy =
@@ -161,9 +153,7 @@ concept LossPolicy =
       { P::CalculateLoss(U, R, T, G) } -> std::same_as<void>;
     };
 
-// ---------------------------------------------------------------------------
 // Default and noop policy implementations
-// ---------------------------------------------------------------------------
 
 // DefaultForwardPass: weighted linear summation with identity activation
 // (i.e. no nonlinearity). Equivalent to a plain matrix-vector multiply.
@@ -252,11 +242,8 @@ struct NoResetGlobalState {
   PLASTIX_HD static void Reset(auto &) {}
 };
 
-// Loss policies stage the upstream gradient dL/dActivation into
-// `BackwardAccTag` on each output unit, so the backward pass can propagate it
-// through the network. Convention: `BackwardAcc` holds the gradient with
-// respect to the output activation, and weight updates subtract
-// `learning_rate * grad * input`.
+// Loss policies stage the upstream gradient dL/dActivation into `BackwardAcc`
+// on each output unit; weight updates subtract learning_rate * grad * input.
 struct NoLoss {
   PLASTIX_HD static void CalculateLoss(auto &, UnitRange,
                                        std::span<const float>, auto &) {}
@@ -266,8 +253,7 @@ struct NoLoss {
 // dL/dpred_i = pred_i - target_i.
 struct MSELoss {
   PLASTIX_HD static void CalculateLoss(auto &U, UnitRange Outputs,
-                                       std::span<const float> Targets,
-                                       auto &) {
+                                       std::span<const float> Targets, auto &) {
     size_t I = 0;
     for (size_t Id : Outputs.Ids()) {
       float Pred = GetActivation(U, Id);
@@ -277,12 +263,11 @@ struct MSELoss {
 };
 
 // Root mean squared error: L = sqrt(mean((pred - target)^2)).
-// dL/dpred_i = (pred_i - target_i) / (N * L). Epsilon keeps the gradient
-// finite when predictions match targets exactly.
+// dL/dpred_i = (pred_i - target_i) / (N * L); epsilon keeps it finite at exact
+// match.
 struct RMSLoss {
   PLASTIX_HD static void CalculateLoss(auto &U, UnitRange Outputs,
-                                       std::span<const float> Targets,
-                                       auto &) {
+                                       std::span<const float> Targets, auto &) {
     float SumSq = 0.0f;
     size_t I = 0;
     for (size_t Id : Outputs.Ids()) {
@@ -300,13 +285,11 @@ struct RMSLoss {
   }
 };
 
-// Softmax over outputs + cross-entropy against a target distribution
-// (one-hot or soft). L = -sum target_i * log(softmax(pred)_i).
+// Softmax + cross-entropy vs a target distribution (one-hot or soft).
 // dL/dpred_i = softmax(pred)_i - target_i.
 struct SoftmaxCrossEntropyLoss {
   PLASTIX_HD static void CalculateLoss(auto &U, UnitRange Outputs,
-                                       std::span<const float> Targets,
-                                       auto &) {
+                                       std::span<const float> Targets, auto &) {
     float Max = -std::numeric_limits<float>::infinity();
     for (size_t Id : Outputs.Ids()) {
       float P = GetActivation(U, Id);
@@ -326,9 +309,7 @@ struct SoftmaxCrossEntropyLoss {
 
 struct EmptyGlobalState {};
 
-// ---------------------------------------------------------------------------
 // Default traits base -- inherit and override individual policies as needed
-// ---------------------------------------------------------------------------
 
 template <typename Global = EmptyGlobalState> struct DefaultNetworkTraits {
   using GlobalState = Global;
@@ -348,19 +329,15 @@ template <typename Global = EmptyGlobalState> struct DefaultNetworkTraits {
   using ExtraConnFields = ConnFieldList<alloc::SOAField<WeightTag, float>>;
   static constexpr uint16_t Neighbourhood = 1;
   static constexpr Propagation Model = Propagation::Topological;
-  // Opt-out flags for policies that are not device-safe (host-only state,
-  // unsafe reductions like `G.Tau += ...` in update). When false, the
-  // corresponding DoX phase always runs the host loop, even on a CUDA
-  // build. Default true: most policies are pure SOA reads/writes and safe
-  // to parallelize.
+  // Opt-out flags for non-device-safe policies (host-only state, unsafe
+  // reductions): false forces the host loop even on CUDA. Default true (pure
+  // SOA reads/writes).
   static constexpr bool KernelizeUpdate = true;
   static constexpr bool KernelizePrune = true;
   static constexpr bool KernelizeAdd = true;
 };
 
-// ---------------------------------------------------------------------------
 // NetworkTraits concept -- validates that all policies satisfy their concepts
-// ---------------------------------------------------------------------------
 
 // Helper: resolve the unit allocator for a given traits type.
 template <typename T>

@@ -25,10 +25,8 @@ PLASTIX_HD constexpr auto &GetWeight(auto &Alloc, size_t Id) {
   return GetField<WeightTag>(Alloc, Id);
 }
 
-// Packs a (From, To) connection-id pair into 64 bits. Used by the device
-// AddConnections proposal pipeline, which sorts/dedups the packed keys as raw
-// uint64_t. Defined here (rather than in plastix.hpp) so the dispatch headers
-// that static_assert on sizeof(CompactEdge) see the complete type.
+// Packs a (From, To) conn-id pair into 64 bits for the device AddConnections
+// pipeline (sort/dedup as raw uint64_t). Here so dispatch headers see the type.
 struct CompactEdge {
   uint64_t Bits;
 
@@ -43,9 +41,9 @@ struct CompactEdge {
 // Type list for user-defined extra connection fields.
 template <typename... Fields> struct ConnFieldList {};
 
-// Connection allocator parameterized by extra fields.
-// Core fields (FromId, ToId, Dead, SrcLevel) are always present.
-// ExtraFields... are additional SOAField<Tag, Type> entries from the user.
+// Connection allocator parameterized by extra fields; core fields (FromId,
+// ToId, Dead, SrcLevel) are always present, ExtraFields... are user SOAField
+// entries.
 template <typename... ExtraFields>
 using MakeConnAllocator =
     alloc::SOAAllocator<ConnectionState, alloc::SOAField<FromIdTag, uint32_t>,

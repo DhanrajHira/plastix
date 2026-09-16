@@ -1,13 +1,8 @@
 #ifndef PLASTIX_DISPATCH_CPU_HPP
 #define PLASTIX_DISPATCH_CPU_HPP
 
-// Host-only implementations of every per-step phase. Each function is a
-// free template that takes the allocators and any extra state by reference
-// so it can stand in as a drop-in replacement for the in-class loop body
-// it used to live as. Pure C++; no CUDA syntax, no `cuda::` references.
-//
-// The matching GPU launchers live in `dispatch_gpu.hpp`. The dispatch site
-// in `Network<Traits>::Do*` picks one with a single `if constexpr`.
+// Host-only per-step phase implementations; pure C++, no CUDA. GPU
+// launchers live in dispatch_gpu.hpp; Do* picks one via `if constexpr`.
 
 #include "plastix/conn.hpp"
 #include "plastix/macros.hpp"
@@ -20,10 +15,8 @@
 
 namespace plastix {
 
-// CompactEdge / LevelRange are framework-internal types used by both
-// dispatch backends. Forward-declared here so dispatch_cpu.hpp doesn't
-// need to pull in plastix.hpp (which would form a cycle); the real
-// definitions still live next to `Network<Traits>`.
+// Forward-declared to avoid a plastix.hpp include cycle; real defs
+// live next to `Network<Traits>`.
 struct LevelRange;
 struct CompactEdge;
 struct InDegreeTag;
@@ -35,14 +28,8 @@ struct ProposalTag;
 
 namespace cpu {
 
-// ---------------------------------------------------------------------------
-// Forward pass -- Topological propagation
-// ---------------------------------------------------------------------------
-//
-// Walks one level at a time: accumulate across every connection in level L
-// into the destination unit's ForwardAcc, then `Apply` on every unit at
-// level L. A signal crosses the entire network in one call. `Ranges`
-// indexes connections by source level (set up by SortConnectionsByLevel).
+// Forward pass -- topological: per-level accumulate then Apply; one call
+// crosses the whole net. `Ranges` indexes conns by source level.
 
 template <typename FP, typename UA, typename CA, typename Globals,
           typename RangesT>
@@ -58,8 +45,8 @@ inline void DoForwardTopological(UA &UnitAlloc, CA &ConnAlloc, Globals *G,
       auto ToId = GetField<ToIdTag>(ConnAlloc, C);
       auto FromId = GetField<FromIdTag>(ConnAlloc, C);
       auto &UAcc = GetForwardAcc(UnitAlloc, ToId);
-      UAcc = FP::Combine(
-          UAcc, FP::Map(UnitAlloc, ToId, FromId, ConnAlloc, C, *G));
+      UAcc =
+          FP::Combine(UAcc, FP::Map(UnitAlloc, ToId, FromId, ConnAlloc, C, *G));
     }
 
     for (size_t I = NumInput; I < NumUnits; ++I) {
@@ -72,12 +59,8 @@ inline void DoForwardTopological(UA &UnitAlloc, CA &ConnAlloc, Globals *G,
   }
 }
 
-// ---------------------------------------------------------------------------
-// Forward pass -- Pipeline propagation
-// ---------------------------------------------------------------------------
-//
-// One sweep over every live connection (no level partitioning), then one
-// `Apply` per non-input unit. A signal advances exactly one layer per call.
+// Forward pass -- pipeline: one sweep over live conns, then one Apply per
+// non-input unit; a signal advances exactly one layer per call.
 
 template <typename FP, typename UA, typename CA, typename Globals>
 inline void DoForwardPipeline(UA &UnitAlloc, CA &ConnAlloc, Globals *G,
@@ -90,8 +73,8 @@ inline void DoForwardPipeline(UA &UnitAlloc, CA &ConnAlloc, Globals *G,
     auto ToId = GetField<ToIdTag>(ConnAlloc, C);
     auto FromId = GetField<FromIdTag>(ConnAlloc, C);
     auto &UAcc = GetForwardAcc(UnitAlloc, ToId);
-    UAcc = FP::Combine(
-        UAcc, FP::Map(UnitAlloc, ToId, FromId, ConnAlloc, C, *G));
+    UAcc =
+        FP::Combine(UAcc, FP::Map(UnitAlloc, ToId, FromId, ConnAlloc, C, *G));
   }
 
   size_t NumUnits = UnitAlloc.Size();
@@ -102,12 +85,8 @@ inline void DoForwardPipeline(UA &UnitAlloc, CA &ConnAlloc, Globals *G,
   }
 }
 
-// ---------------------------------------------------------------------------
-// Backward pass -- Topological propagation
-// ---------------------------------------------------------------------------
-//
-// Walks levels high-to-low; gradients flow backward, so `Apply` runs on the
-// source unit and `Map` reads destination-side state.
+// Backward pass -- topological: levels high-to-low; Apply on source unit,
+// Map reads destination-side state.
 
 template <typename BP, typename UA, typename CA, typename Globals,
           typename RangesT>
@@ -123,8 +102,8 @@ inline void DoBackwardTopological(UA &UnitAlloc, CA &ConnAlloc, Globals *G,
       auto ToId = GetField<ToIdTag>(ConnAlloc, C);
       auto FromId = GetField<FromIdTag>(ConnAlloc, C);
       auto &UAcc = GetBackwardAcc(UnitAlloc, FromId);
-      UAcc = BP::Combine(
-          UAcc, BP::Map(UnitAlloc, FromId, ToId, ConnAlloc, C, *G));
+      UAcc =
+          BP::Combine(UAcc, BP::Map(UnitAlloc, FromId, ToId, ConnAlloc, C, *G));
     }
 
     for (size_t I = NumInput; I < NumUnits; ++I) {
@@ -137,9 +116,7 @@ inline void DoBackwardTopological(UA &UnitAlloc, CA &ConnAlloc, Globals *G,
   }
 }
 
-// ---------------------------------------------------------------------------
 // Backward pass -- Pipeline propagation
-// ---------------------------------------------------------------------------
 
 template <typename BP, typename UA, typename CA, typename Globals>
 inline void DoBackwardPipeline(UA &UnitAlloc, CA &ConnAlloc, Globals *G,
@@ -152,8 +129,8 @@ inline void DoBackwardPipeline(UA &UnitAlloc, CA &ConnAlloc, Globals *G,
     auto ToId = GetField<ToIdTag>(ConnAlloc, C);
     auto FromId = GetField<FromIdTag>(ConnAlloc, C);
     auto &UAcc = GetBackwardAcc(UnitAlloc, FromId);
-    UAcc = BP::Combine(
-        UAcc, BP::Map(UnitAlloc, FromId, ToId, ConnAlloc, C, *G));
+    UAcc =
+        BP::Combine(UAcc, BP::Map(UnitAlloc, FromId, ToId, ConnAlloc, C, *G));
   }
 
   size_t NumUnits = UnitAlloc.Size();
@@ -164,9 +141,7 @@ inline void DoBackwardPipeline(UA &UnitAlloc, CA &ConnAlloc, Globals *G,
   }
 }
 
-// ---------------------------------------------------------------------------
 // Per-unit / per-connection update phases
-// ---------------------------------------------------------------------------
 
 template <typename UP, typename UA, typename Globals>
 inline void DoUpdateUnit(UA &UnitAlloc, Globals *G) {
@@ -194,9 +169,7 @@ inline void DoUpdateConn(UA &UnitAlloc, CA &ConnAlloc, Globals *G) {
   }
 }
 
-// ---------------------------------------------------------------------------
 // Prune phases
-// ---------------------------------------------------------------------------
 
 template <typename PP, typename UA, typename Globals>
 inline void DoPruneUnits(UA &UnitAlloc, Globals *G) {
@@ -230,9 +203,7 @@ inline void DoPruneConnections(UA &UnitAlloc, CA &ConnAlloc, Globals *G) {
   }
 }
 
-// ---------------------------------------------------------------------------
 // Add phases
-// ---------------------------------------------------------------------------
 
 template <typename AP, typename UA, typename Globals>
 inline void DoAddUnits(UA &UnitAlloc, Globals *G, uint16_t MaxLvl) {
@@ -251,12 +222,8 @@ inline void DoAddUnits(UA &UnitAlloc, Globals *G, uint16_t MaxLvl) {
   }
 }
 
-// AddConnections is the only phase whose CPU and GPU pipelines diverge
-// algorithmically: the host path indexes units by level into the Kahn
-// scratch arrays, walks a rolling level-pair window for proposal
-// collection, sorts the packed (From, To) keys, and commits unique
-// proposals serially. Returns true when at least one connection was
-// committed (caller flips NeedsResort).
+// Host add-conn: index units by level, walk a rolling level-pair window,
+// sort packed (From,To) keys, commit uniques. True if any committed.
 
 template <typename AC, typename UA, typename CA, typename KA, typename PA,
           typename Globals>
@@ -299,9 +266,8 @@ inline bool DoAddConnections(UA &UnitAlloc, CA &ConnAlloc, KA &KahnAlloc,
   size_t NumProposals = 0;
   size_t MaxProposals = ProposalAlloc.GetCapacity();
 
-  // Process one level-pair (La <= Lb). For cross-level pairs, queries
-  // both (U,V) and (V,U) perspectives to match the original all-pairs
-  // semantics.
+  // Process one level-pair (La <= Lb); cross-level pairs query both
+  // (U,V) and (V,U) to match all-pairs semantics.
   auto ProcessLevelPair = [&](uint16_t La, uint16_t Lb) {
     for (uint32_t Ai = LevelOffset[La]; Ai < LevelOffset[La + 1]; ++Ai) {
       uint32_t U = UnitsByLevel[Ai];
@@ -370,14 +336,8 @@ inline bool DoAddConnections(UA &UnitAlloc, CA &ConnAlloc, KA &KahnAlloc,
   return ConnAlloc.Size() > SizeBefore;
 }
 
-// ---------------------------------------------------------------------------
-// Topology rebuild (Kahn's algorithm, level-parallel on host)
-// ---------------------------------------------------------------------------
-//
-// Resets non-input levels to 0, builds a CSR-style outgoing-edge list,
-// then BFS-propagates levels from the input frontier outward. `OutEdges`
-// is the connection allocator's permutation scratch (re-used here since
-// the topology sort is the only other consumer).
+// Topology rebuild (Kahn, level-parallel): reset levels, build CSR
+// out-edges, BFS from the input frontier. `OutEdges` = conn perm scratch.
 
 template <typename UA, typename CA, typename KA>
 inline void RecomputeLevels(UA &UnitAlloc, CA &ConnAlloc, KA &KahnAlloc,

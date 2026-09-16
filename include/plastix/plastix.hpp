@@ -24,27 +24,12 @@ namespace plastix {
 /// Returns the library version as a string.
 const char *version();
 
-// ---------------------------------------------------------------------------
 // Network
-//
-// Network<Traits> is the central runtime object. It owns the unit and
-// connection allocators and drives the per-step execution pipeline by calling
-// into the policy structs defined in Traits. All policy dispatch is resolved
-// at compile time — there are no virtual calls.
-//
-// Typical usage:
-//   Network<MyTraits> net(InputDim, FullyConnected{HiddenDim}, FullyConnected{OutputDim});
-//   net.DoStep(inputs);
-//   auto out = net.GetOutput();
-// ---------------------------------------------------------------------------
 
 static constexpr uint16_t MaxLevels = 1024;
 
-// Compile-time backend witness. Every Do* phase picks between
-// `plastix::cpu::Foo(...)` and `plastix::gpu::Foo(...)` with
-// `if constexpr (HasCuda && <per-phase predicate>)`. The gpu side is
-// always declared (empty stubs in host builds) so the qualified-name
-// lookup in the discarded branch resolves.
+// Compile-time backend witness: Do* phases pick cpu:: vs gpu:: via
+// `if constexpr (HasCuda && ...)`; gpu side always declared for lookup.
 #ifdef PLASTIX_HAS_CUDA
 inline constexpr bool HasCuda = true;
 #else
@@ -83,9 +68,8 @@ template <NetworkTraits Traits> class Network {
   using ConnAllocator = ConnAllocFor<Traits>;
   using GlobalState = typename Traits::GlobalState;
 
-  // Allocate Globals in unified memory (or heap, in non-CUDA builds) so the
-  // single live GlobalState instance is addressable from both host code and
-  // kernels. Kernels take Globals by pointer and dereference inside.
+  // Globals in unified memory (or heap in non-CUDA) so the single instance
+  // is addressable from host and kernels, which take it by pointer.
   static GlobalState *AllocGlobals() {
 #ifdef PLASTIX_HAS_CUDA
     void *P = nullptr;

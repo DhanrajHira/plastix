@@ -1,11 +1,9 @@
 #ifndef PLASTIX_CUDA_KERNELS_HPP
 #define PLASTIX_CUDA_KERNELS_HPP
 
-// Per-DoX CUDA kernels. One free function per phase; the network's DoX()
-// methods select between the host loop and the kernel launch under
-// PLASTIX_HAS_CUDA. Kernels accept the allocators by value (relying on the
-// shallow-copy ctor in alloc.hpp) so the device sees the same managed-memory
-// pointers without needing the host allocator object itself to be on-device.
+// Per-DoX CUDA kernels, one per phase, selected under PLASTIX_HAS_CUDA.
+// Allocators passed by value (shallow-copy ctor) so device sees the same
+// managed pointers.
 
 #ifdef PLASTIX_HAS_CUDA
 
@@ -22,20 +20,9 @@
 namespace plastix {
 namespace cuda {
 
-// ---------------------------------------------------------------------------
-// Forward pass -- Pipeline propagation
-// ---------------------------------------------------------------------------
-//
-// Two kernels per call:
-//   1. ForwardConnSweepKernel -- one thread per connection. Skips dead conns.
-//      Calls FP::Map(...) and atomicAdds the result into ForwardAcc[ToId].
-//   2. ForwardUnitApplyKernel -- one thread per non-input unit. Calls
-//      FP::Apply(...) on the accumulated value, then resets the accumulator.
-//
-// Constraint (MVP): FP::Combine must be `+` over `float`. atomicAdd<float>
-// is the only Combine the kernel knows about today; if a user policy needs a
-// non-additive combine, fall back to the host path. We assert this at the
-// call site by requiring `FP::Accumulator == float`.
+// Forward pass -- Pipeline propagation (conn-sweep atomicAdd into ForwardAcc,
+// then unit-apply). Constraint: FP::Combine must be + over float;
+// atomicAdd<float> is the only Combine (else host path).
 
 template <typename FP, typename UnitAlloc, typename ConnAlloc, typename Globals>
 __global__ void ForwardConnSweepKernel(size_t NumConns, UnitAlloc U,
@@ -64,15 +51,9 @@ __global__ void ForwardUnitApplyKernel(size_t Begin, size_t End, UnitAlloc U,
   UAcc = Acc{};
 }
 
-// ---------------------------------------------------------------------------
-// Forward pass -- Topological propagation
-// ---------------------------------------------------------------------------
-//
-// Same kernel pair as Pipeline, but the connection sweep is restricted to
-// `[Begin, End)` (the level's connection range) and the unit-apply kernel
-// applies only to units of the matching level. The level is filtered inside
-// the kernel via GetLevel(); a future pass could partition units by level
-// at sort time and remove the filter.
+// Forward pass -- Topological propagation: as Pipeline but conn-sweep limited
+// to the level's [Begin,End). Unit-apply filters by level via GetLevel() (could
+// be removed by partitioning units at sort time).
 
 template <typename FP, typename UnitAlloc, typename ConnAlloc, typename Globals>
 __global__ void ForwardConnSweepLevelKernel(uint32_t Begin, uint32_t End,
@@ -106,11 +87,8 @@ __global__ void ForwardUnitApplyLevelKernel(size_t Begin, size_t End,
   UAcc = Acc{};
 }
 
-// ---------------------------------------------------------------------------
-// Backward pass -- both propagation models. Walks connections in the
-// forward direction by index but accumulates into the source unit's
-// BackwardAcc instead of the destination's ForwardAcc.
-// ---------------------------------------------------------------------------
+// Backward pass -- both models. Walk conns forward by index but accumulate
+// into the source unit's BackwardAcc (not the dest's ForwardAcc).
 
 template <typename BP, typename UnitAlloc, typename ConnAlloc, typename Globals>
 __global__ void BackwardConnSweepKernel(size_t NumConns, UnitAlloc U,
@@ -171,9 +149,7 @@ __global__ void BackwardUnitApplyLevelKernel(size_t Begin, size_t End,
   UAcc = Acc{};
 }
 
-// ---------------------------------------------------------------------------
-// Update / prune phases -- one thread per element, no reduction needed.
-// ---------------------------------------------------------------------------
+// Update / prune phases -- one thread per element, no reduction.
 
 template <typename UP, typename UnitAlloc, typename Globals>
 __global__ void UpdateUnitKernel(size_t NumUnits, UnitAlloc U, Globals *G) {
@@ -233,8 +209,7 @@ __global__ void PruneConnectionsKernel(size_t NumConns, UnitAlloc U,
   auto FromId = GetField<FromIdTag>(C, I);
   bool Remove = false;
   if constexpr (HasUnitPrune)
-    Remove =
-        GetField<PrunedTag>(U, ToId) || GetField<PrunedTag>(U, FromId);
+    Remove = GetField<PrunedTag>(U, ToId) || GetField<PrunedTag>(U, FromId);
   if constexpr (HasConnPrune) {
     if (!Remove)
       Remove = CP::ShouldPrune(U, ToId, FromId, C, I, *G);
@@ -243,10 +218,7 @@ __global__ void PruneConnectionsKernel(size_t NumConns, UnitAlloc U,
     GetField<DeadTag>(C, I) = true;
 }
 
-// ---------------------------------------------------------------------------
-// RecomputeLevels -- level-parallel Kahn's algorithm
-// ---------------------------------------------------------------------------
-//
+// RecomputeLevels -- level-parallel Kahn's algorithm.
 // Reset non-input unit levels in parallel.
 
 template <typename UnitAlloc>
@@ -271,9 +243,8 @@ __global__ void CountDegreesKernel(size_t NumConns, ConnAlloc C,
   atomicAdd(&InDegree[GetField<ToIdTag>(C, Cid)], 1u);
 }
 
-// Scatter live connections into the CSR-style outgoing-edge list. WritePos
-// starts as a copy of OutOffset; each thread atomically increments its bucket
-// to claim a slot.
+// Scatter live conns into the CSR outgoing-edge list. WritePos starts as a
+// copy of OutOffset; each thread atomically bumps its bucket to claim a slot.
 template <typename ConnAlloc>
 __global__ void ScatterEdgesKernel(size_t NumConns, ConnAlloc C,
                                    uint32_t *WritePos, size_t *OutEdges) {
@@ -295,18 +266,14 @@ __global__ void InitFrontierKernel(size_t NumInput, uint32_t *Frontier) {
   Frontier[I] = static_cast<uint32_t>(I);
 }
 
-// Process one BFS level. Each thread owns one frontier entry, walks its
-// outgoing edges, atomically decrements the destination's in-degree, and on
-// the decrement-to-zero edge claims a slot in the next frontier and writes
-// the level. atomicSub returns the OLD value, so old==1 means this thread
-// drove it to zero.
+// Process one BFS level: each thread walks its frontier unit's out-edges and
+// atomicSubs dst in-degree; old==1 (returns OLD) means it hit zero -> enqueue +
+// set level.
 template <typename UnitAlloc, typename ConnAlloc>
-__global__ void
-ProcessFrontierKernel(uint32_t FrontierSize, uint16_t Level, UnitAlloc U,
-                      ConnAlloc C, uint32_t *InDegree,
-                      const uint32_t *OutOffset, const size_t *OutEdges,
-                      const uint32_t *Frontier, uint32_t *NextFrontier,
-                      uint32_t *NextSize) {
+__global__ void ProcessFrontierKernel(
+    uint32_t FrontierSize, uint16_t Level, UnitAlloc U, ConnAlloc C,
+    uint32_t *InDegree, const uint32_t *OutOffset, const size_t *OutEdges,
+    const uint32_t *Frontier, uint32_t *NextFrontier, uint32_t *NextSize) {
   uint32_t F = blockIdx.x * blockDim.x + threadIdx.x;
   if (F >= FrontierSize)
     return;
@@ -325,31 +292,17 @@ ProcessFrontierKernel(uint32_t FrontierSize, uint16_t Level, UnitAlloc U,
   }
 }
 
-// ---------------------------------------------------------------------------
-// AddConnections -- proposal collection
-// ---------------------------------------------------------------------------
-//
-// One thread per ordered (U, V) pair with U != V. Filters out pairs whose
-// level difference exceeds Neighbourhood, then evaluates the AddConn
-// policy's two predicates and atomically claims slots in the proposal
-// buffer. This matches the host loop's semantics: every level pair within
-// the window is visited exactly once per direction, so each ordered
-// (U, V) combination evaluates `ShouldAddIncoming(U,V)` and
-// `ShouldAddOutgoing(U,V)` once.
-//
-// Slots beyond MaxProposals are dropped silently (capacity bound). The
-// caller clamps the final counter after the launch.
-// Encodes (From, To) as `From | (To << 32)` to match `CompactEdge::Bits`.
+// AddConnections proposals: one thread per ordered (U,V) pair, level-diff
+// filtered; over-MaxProposals slots dropped silently (caller clamps).
+// PackEdgeBits encodes (From,To) as From|(To<<32) to match CompactEdge::Bits.
 __device__ inline uint64_t PackEdgeBits(uint32_t From, uint32_t To) {
-  return static_cast<uint64_t>(From) |
-         (static_cast<uint64_t>(To) << 32);
+  return static_cast<uint64_t>(From) | (static_cast<uint64_t>(To) << 32);
 }
 
 template <typename AddConnPolicy, typename UnitAlloc, typename Globals>
-__global__ void
-CollectProposalsKernel(size_t NumUnits, uint16_t Neighbourhood, UnitAlloc U,
-                       Globals *G, uint64_t *Props, uint32_t *Counter,
-                       size_t MaxProposals) {
+__global__ void CollectProposalsKernel(size_t NumUnits, uint16_t Neighbourhood,
+                                       UnitAlloc U, Globals *G, uint64_t *Props,
+                                       uint32_t *Counter, size_t MaxProposals) {
   size_t T = blockIdx.x * blockDim.x + threadIdx.x;
   size_t Total = NumUnits * NumUnits;
   if (T >= Total)
@@ -368,26 +321,20 @@ CollectProposalsKernel(size_t NumUnits, uint16_t Neighbourhood, UnitAlloc U,
   if (AddConnPolicy::ShouldAddIncomingConnection(U, Ui, Vi, *G)) {
     uint32_t Slot = atomicAdd(Counter, 1u);
     if (static_cast<size_t>(Slot) < MaxProposals)
-      Props[Slot] = PackEdgeBits(static_cast<uint32_t>(Vi),
-                                 static_cast<uint32_t>(Ui));
+      Props[Slot] =
+          PackEdgeBits(static_cast<uint32_t>(Vi), static_cast<uint32_t>(Ui));
   }
   if (AddConnPolicy::ShouldAddOutgoingConnection(U, Ui, Vi, *G)) {
     uint32_t Slot = atomicAdd(Counter, 1u);
     if (static_cast<size_t>(Slot) < MaxProposals)
-      Props[Slot] = PackEdgeBits(static_cast<uint32_t>(Ui),
-                                 static_cast<uint32_t>(Vi));
+      Props[Slot] =
+          PackEdgeBits(static_cast<uint32_t>(Ui), static_cast<uint32_t>(Vi));
   }
 }
 
-// ---------------------------------------------------------------------------
-// AddConnections -- dedup commit
-// ---------------------------------------------------------------------------
-//
-// Phase 3 splits in two: a flag kernel that marks the first occurrence of
-// each unique key, then (after a scan) a commit kernel that materializes
-// kept proposals into the connection allocator. Stream-compaction by scan
-// preserves the post-sort order so commit slots are deterministic
-// (Begin + WritePos) instead of atomically claimed.
+// AddConnections -- dedup commit: flag kernel marks first occurrence of each
+// key, then commit kernel materializes kept proposals at deterministic
+// Begin+scan slots.
 
 template <typename T = void>
 __global__ void DedupFlagKernel(size_t NumProposals, const uint64_t *Props,
@@ -407,11 +354,10 @@ __global__ void DedupFlagKernel(size_t NumProposals, const uint64_t *Props,
 
 template <typename AddConnPolicy, typename UnitAlloc, typename ConnAlloc,
           typename Globals>
-__global__ void CommitProposalsKernel(size_t NumProposals,
-                                      const uint64_t *Props,
-                                      const uint32_t *ScannedFlags,
-                                      size_t BeginConnId, UnitAlloc U,
-                                      ConnAlloc C, Globals *G) {
+__global__ void
+CommitProposalsKernel(size_t NumProposals, const uint64_t *Props,
+                      const uint32_t *ScannedFlags, size_t BeginConnId,
+                      UnitAlloc U, ConnAlloc C, Globals *G) {
   size_t I = blockIdx.x * blockDim.x + threadIdx.x;
   if (I >= NumProposals)
     return;
@@ -427,20 +373,9 @@ __global__ void CommitProposalsKernel(size_t NumProposals,
   AddConnPolicy::InitConnection(U, F, T, C, ConnId, *G);
 }
 
-// ---------------------------------------------------------------------------
-// AddUnits kernel
-// ---------------------------------------------------------------------------
-//
-// One thread per existing parent. The thread evaluates AP::AddUnit; if it
-// returns an offset, it claims a new unit via UnitAlloc.Allocate() (atomic
-// counter under the hood), writes the clamped level, and calls AP::InitUnit.
-// Capacity exhaustion shows up as Allocate returning size_t(-1) and is
-// silently dropped, matching the host loop's reliance on capacity bounds.
-//
-// Constraint: AP::AddUnit and AP::InitUnit must be `PLASTIX_HD`. Policies
-// that mutate Globals non-atomically or use host-only APIs (RNG, std::cout)
-// should set `Traits::KernelizeAdd = false` on their traits to keep this
-// phase on the host loop.
+// AddUnits -- one thread per parent; Allocate() returning size_t(-1) = capacity
+// full, dropped. AP::AddUnit/InitUnit must be PLASTIX_HD; else set
+// Traits::KernelizeAdd=false for the host path.
 template <typename AddUnitPolicy, typename UnitAlloc, typename Globals>
 __global__ void AddUnitsKernel(size_t NumParents, uint16_t MaxLvl, UnitAlloc U,
                                Globals *G) {
