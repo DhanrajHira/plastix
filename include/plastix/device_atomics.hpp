@@ -36,6 +36,28 @@ PLASTIX_HD void WarpAtomicAdd(float &Dst, float Val) {
 #endif
 }
 
+// Keyed (segmented) warp-aggregated scatter-add: lanes that target the *same*
+// Key (e.g. the destination unit of a connection) are grouped, reduced, and a
+// single atomicAdd is issued per group. This makes a per-edge scatter into a
+// per-unit accumulator both full-GPU parallel (one thread per edge) AND
+// contention-free even when one unit has a huge in-degree (e.g. one output fed
+// by a million inputs — every lane in a warp shares its Key, so it collapses to
+// one atomic per warp). Caller must ensure &Dst is the same for equal Keys.
+template <typename KeyT>
+PLASTIX_HD void WarpAtomicAddKeyed(float &Dst, float Val, KeyT Key) {
+#ifdef __CUDA_ARCH__
+  namespace cg = cooperative_groups;
+  auto Warp = cg::coalesced_threads();
+  auto Group =
+      cg::labeled_partition(Warp, static_cast<unsigned long long>(Key));
+  float Sum = cg::reduce(Group, Val, cg::plus<float>());
+  if (Group.thread_rank() == 0)
+    atomicAdd(&Dst, Sum);
+#else
+  Dst += Val;
+#endif
+}
+
 } // namespace plastix
 
 #endif // PLASTIX_DEVICE_ATOMICS_HPP
