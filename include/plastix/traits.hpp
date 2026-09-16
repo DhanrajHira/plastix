@@ -299,6 +299,27 @@ template <> struct AllocSelector<true> {
 };
 #endif
 
+// Wire an optimizer bundle (see plastix::optim) into a traits class in one
+// line: sets UpdateConn to the bundle and appends its per-connection state
+// columns to the base's ExtraConnFields. A mixin so the base keeps its own
+// fields; the bundle contributes only its opt/... columns.
+//
+//   struct MyTraits : plastix::WithOptimizer<MyBase,
+//                                            plastix::optim::Adam<GradTag>> {};
+template <typename Base, typename Opt> struct WithOptimizer : Base {
+  using UpdateConn = Opt;
+  using ExtraConnFields = ConcatConnFields<typename Base::ExtraConnFields,
+                                           typename Opt::StateFields>;
+
+  // Two bundles in one traits class, or a user field reusing an opt/... tag,
+  // would alias silently (the allocator keys on the tag and IndexOf returns the
+  // first match). Catch it here instead.
+  static_assert(ConnFieldTagsAreUniqueV<ExtraConnFields>,
+                "WithOptimizer: duplicate connection field tag. A traits class "
+                "carries at most one optimizer bundle, and its own fields must "
+                "not reuse the bundle's tags (plastix::optim::Opt*Tag).");
+};
+
 // Resolve the unit allocator for a given traits type.
 template <typename T>
 using UnitAllocFor = MakeUnitAllocatorFromWith<

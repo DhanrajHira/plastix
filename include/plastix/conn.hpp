@@ -4,7 +4,9 @@
 #include "plastix/alloc.hpp"
 #include "plastix/macros.hpp"
 
+#include <cstddef>
 #include <cstdint>
+#include <type_traits>
 
 namespace plastix {
 
@@ -40,6 +42,39 @@ struct CompactEdge {
 
 // Type list for user-defined extra connection fields.
 template <typename... Fields> struct ConnFieldList {};
+
+// Concatenate two ConnFieldLists so a traits class can combine its own fields
+// with a library bundle's (see WithOptimizer) instead of restating both.
+template <typename A, typename B> struct ConcatConnFieldsImpl;
+
+template <typename... A, typename... B>
+struct ConcatConnFieldsImpl<ConnFieldList<A...>, ConnFieldList<B...>> {
+  using type = ConnFieldList<A..., B...>;
+};
+
+template <typename A, typename B>
+using ConcatConnFields = typename ConcatConnFieldsImpl<A, B>::type;
+
+// True when no two fields share a tag. Tags are the allocator's only key
+// (SOAAllocator::IndexOf returns the first match), so a duplicate would
+// silently alias two columns onto one array rather than fail.
+template <typename List> struct ConnFieldTagsAreUnique;
+
+template <typename... Fields>
+struct ConnFieldTagsAreUnique<ConnFieldList<Fields...>> {
+private:
+  template <typename Tag> static constexpr size_t CountOf() {
+    return ((std::is_same_v<Tag, typename Fields::Tag> ? 1u : 0u) + ...);
+  }
+
+public:
+  static constexpr bool value =
+      ((CountOf<typename Fields::Tag>() == 1u) && ...);
+};
+
+template <typename List>
+inline constexpr bool ConnFieldTagsAreUniqueV =
+    ConnFieldTagsAreUnique<List>::value;
 
 // Connection allocator parameterized by extra fields; core fields (FromId,
 // ToId, Dead, SrcLevel) are always present, ExtraFields... are user SOAField
