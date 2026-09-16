@@ -6,6 +6,9 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 option(PLASTIX_BUILD_TESTS "Build tests" ON)
+# The RNG parity tests need a JSON reader, so they are separable for downstream
+# consumers that would rather not pull one in.
+option(PLASTIX_BUILD_PARITY_TESTS "Build the RNG parity/golden tests" ON)
 option(PLASTIX_BUILD_BENCHMARKS "Build benchmarks" ON)
 option(PLASTIX_BUILD_EXAMPLES "Build examples" ON)
 option(PLASTIX_ENABLE_CUDA "Enable CUDA support" OFF)
@@ -116,6 +119,22 @@ if(PLASTIX_BUILD_TESTS)
         GIT_TAG v1.15.2
     )
     FetchContent_MakeAvailable(googletest)
+
+    # The RNG parity tests read golden vectors as JSON. Prefer a system
+    # nlohmann_json (most distros package it) and only fall back to fetching, so
+    # an offline build with the package installed works.
+    if(PLASTIX_BUILD_PARITY_TESTS)
+        find_package(nlohmann_json 3.11 QUIET)
+        if(NOT nlohmann_json_FOUND)
+            FetchContent_Declare(
+                nlohmann_json
+                GIT_REPOSITORY https://github.com/nlohmann/json.git
+                GIT_TAG v3.11.3
+            )
+            FetchContent_MakeAvailable(nlohmann_json)
+        endif()
+    endif()
+
     enable_testing()
     add_subdirectory(tests)
 endif()
