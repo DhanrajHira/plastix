@@ -1,11 +1,9 @@
 #ifndef PLASTIX_CUDA_GRAPH_HPP
 #define PLASTIX_CUDA_GRAPH_HPP
 
-// RAII wrapper over a captured-and-instantiated CUDA graph (ADR-008 P0). Capture
-// a repeated, host-parameter-stable sequence of device kernel launches once and
-// replay it with a single cudaGraphLaunch, amortizing per-launch overhead. Only
-// device work issued on the capture stream is recorded; the body must not
-// synchronize or touch the legacy default stream during capture.
+// RAII capture/instantiate/replay of a CUDA graph (ADR-008 P0): record a
+// repeated launch sequence once, replay it with one cudaGraphLaunch. The capture
+// body must issue async work only on the capture stream (no sync).
 
 #include "plastix/macros.hpp"
 
@@ -43,9 +41,8 @@ public:
 
   bool ready() const { return Exec_ != nullptr; }
 
-  // Record the device work issued by Body() onto Stream into an executable graph.
-  // Body must launch async work on Stream only and must not synchronize. A prior
-  // capture is discarded first (safe to call to re-capture after a shape change).
+  // Capture Body()'s launches on Stream into an executable graph (discards any
+  // prior capture, so it is safe to re-capture after a shape change).
   template <class Fn> void Capture(cudaStream_t Stream, Fn &&Body) {
     Reset();
     PLASTIX_CUDA_CHECK(

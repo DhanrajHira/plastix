@@ -120,8 +120,7 @@ public:
 #endif
       RebuildReverseAdjacency();
     }
-    // Device-resident backend (ADR-006): construction built the host staging
-    // mirror; one upload makes the device buffers authoritative for the run.
+    // Device-resident (ADR-006): upload the constructed staging mirror once.
     if constexpr (alloc::IsDeviceResidentV<UnitAllocator>) {
       UnitAlloc.PushToDevice();
       ConnAlloc.PushToDevice();
@@ -180,8 +179,7 @@ public:
   void DoForwardPass(std::span<const float> Inputs) {
     for (size_t I = 0; I < NumInput; ++I)
       GetActivation(UnitAlloc, I) = Inputs[I];
-    // Device-resident: push only the just-written input activations; the rest of
-    // the arena stays device-resident (kernels overwrite non-input activations).
+    // Device-resident: push just the input slice (kernels rewrite the rest).
     if constexpr (alloc::IsDeviceResidentV<UnitAllocator>)
       UnitAlloc.template PushFieldSlice<ActivationTag>(0, NumInput);
     RunForward();
@@ -190,9 +188,8 @@ public:
   }
 
 #ifdef PLASTIX_HAS_CUDA
-  // Device-input forward (ADR-007 M2): the input already lives on the device
-  // (e.g. a torch CUDA tensor). Copies the input slice device->device into the
-  // activation arena -- no host round-trip -- then runs the forward.
+  // Device-input forward (ADR-007 M2): D2D-copy the input slice from a device
+  // pointer (e.g. a torch CUDA tensor) into the arena, then run -- no host trip.
   void DoForwardPassDevice(const float *DeviceInput) {
     static_assert(alloc::IsDeviceResidentV<UnitAllocator>,
                   "DoForwardPassDevice requires the device-resident backend");
@@ -229,9 +226,8 @@ public:
     else {
       if (Targets.empty())
         return;
-      // Device-resident: upload the small target slice and run the loss on the
-      // device view (no D2H of outputs, no H2D of the gradient, no host code
-      // between forward and backward). Guarded by #ifdef so the CPU build never
+      // Device-resident: upload the target slice, run the loss on the device
+      // view (no output D2H, no gradient H2D). #ifdef so the CPU build never
       // names cuda* / the device buffer.
 #ifdef PLASTIX_HAS_CUDA
       if constexpr (alloc::IsDeviceResidentV<UnitAllocator>) {
@@ -429,10 +425,8 @@ public:
   UnitRange GetOutputRange() const { return OutputRange; }
   size_t GetNumInput() const { return NumInput; }
 
-  // Device-resident: refresh the output activations into the host staging mirror
-  // so GetOutput() reads current values. A no-op on the managed/mmap backend.
-  // (DoCalculateLoss already pulls this slice each step; call this before
-  // GetOutput on an inference-only path with no loss.)
+  // Device-resident: refresh the output slice into host staging so GetOutput()
+  // is current (no-op on managed). Call before GetOutput on a loss-free path.
   void SyncOutputToHost() {
     if constexpr (alloc::IsDeviceResidentV<UnitAllocator>)
       UnitAlloc.template PullFieldSlice<ActivationTag>(OutputRange.Begin,
@@ -442,19 +436,16 @@ public:
   auto &GetConnAlloc() { return ConnAlloc; }
   auto &GetUnitAlloc() { return UnitAlloc; }
 
-  // Host access to the single live GlobalState. Benchmarks/examples stage
-  // runtime policy parameters here (learning rate, prune/add arming, budgets)
-  // between Do* phases. Globals lives in unified memory (CUDA) or on the heap
-  // (CPU), so this is directly host-addressable; a CUDA caller mutating it must
-  // still order the write before the kernels that read it.
+  // Host access to the single live GlobalState (runtime policy params, staged
+  // between phases). Managed/heap-backed, so directly host-addressable; a CUDA
+  // caller must order its write before the kernels that read it.
   GlobalState &Global() { return *Globals; }
   const GlobalState &Global() const { return *Globals; }
 
 private:
 #ifdef PLASTIX_HAS_CUDA
-  // Capture the forward kernel sequence once (or after a unit-count change) and
-  // replay it, amortizing per-launch overhead (ADR-008 P0). RunFwd(stream, sync)
-  // issues the forward kernels on the given stream; during capture sync=false.
+  // Capture the forward sequence once (re-capture on a unit-count change) and
+  // replay it (ADR-008 P0). RunFwd(stream, sync=false) issues it during capture.
   template <class RunFwd> void LaunchForwardGraph(RunFwd &&Run) {
     if (!CaptureStream_)
       PLASTIX_CUDA_CHECK(cudaStreamCreate(&CaptureStream_));
@@ -468,9 +459,8 @@ private:
   }
 #endif
 
-  // Forward kernel dispatch shared by DoForwardPass (host input) and
-  // DoForwardPassDevice (device input). The CUDA-graph path is entirely under
-  // PLASTIX_HAS_CUDA so the CPU build never names graph-only members.
+  // Forward dispatch shared by the host- and device-input entry points. The
+  // graph path is entirely under #ifdef so the CPU build names no graph members.
   void RunForward() {
     using FP = typename Traits::ForwardPass;
     using Acc = typename FP::Accumulator;

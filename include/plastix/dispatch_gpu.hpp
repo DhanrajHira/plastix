@@ -402,10 +402,9 @@ inline void DoResetGlobalOnDevice(G *Globals) {
   PLASTIX_CUDA_CHECK(cudaDeviceSynchronize());
 }
 
-// Device-side loss (ADR-007/008): run the (device-callable) loss policy on the
-// device view so it reads Activation and writes BackwardAcc in place -- no D2H
-// of the output activations, no H2D of the gradient. The policy iterates the
-// whole output range internally, so one thread runs it (output units are few).
+// Device-side loss (ADR-007/008): the device-callable loss policy reads
+// Activation and writes BackwardAcc in place. One thread runs it -- the policy
+// loops the (few) output units internally.
 template <typename Loss, typename UV, typename Globals>
 __global__ void CalculateLossKernel(UV Unit, UnitRange Out,
                                     const float *Targets, size_t N,
