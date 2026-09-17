@@ -31,6 +31,22 @@
 namespace plastix {
 namespace alloc {
 
+// Device permutation-gather (device-resident compaction/resort, ADR-006
+// follow-up): Dst[I] = Src[Perm[I]] for I in [0,N). One instantiation per field.
+template <typename E>
+__global__ void DeviceGatherKernel(E *Dst, const E *Src, const size_t *Perm,
+                                   size_t N) {
+  for (size_t I = blockIdx.x * blockDim.x + threadIdx.x; I < N;
+       I += gridDim.x * blockDim.x)
+    Dst[I] = Src[Perm[I]];
+}
+
+// Store a scalar live count into a device-resident atomic (post-compaction).
+template <typename C>
+__global__ void DeviceSetCountKernel(C *Count, size_t N) {
+  Count->store(N);
+}
+
 // Device-resident twin of SOAAllocator: a host staging SoaView plus a device
 // SoaView over cudaMalloc buffers. Move-only (one owner frees). Field arenas
 // are over-allocated to Capacity*MaxFieldSize to match SOAAllocator's layout;
@@ -99,7 +115,14 @@ template <typename T, typename... Fields> class DeviceResidentSOA {
           ((P = static_cast<decltype(+P)>(DeviceAlloc(Arena))), ...);
         },
         Device_.FieldPtrs);
-    // BackFieldPtrs / PermScratch stay null: no device-side compaction yet.
+    // Device-resident growth (ADR-006 follow-up): back buffers + permutation
+    // scratch back in-place device compaction/resort (GatherDevice).
+    std::apply(
+        [&](auto &...P) {
+          ((P = static_cast<decltype(+P)>(DeviceAlloc(Arena))), ...);
+        },
+        Device_.BackFieldPtrs);
+    Device_.PermScratch = static_cast<size_t *>(DeviceAlloc(N * sizeof(size_t)));
     Device_.CountPtr =
         static_cast<AtomicCount *>(DeviceAlloc(sizeof(AtomicCount)));
   }
@@ -118,8 +141,20 @@ template <typename T, typename... Fields> class DeviceResidentSOA {
   void ReleaseDevice() {
     // cudaFree(nullptr) is a well-defined no-op, so unset fields are safe.
     std::apply([](auto *...P) { ((void)cudaFree(P), ...); }, Device_.FieldPtrs);
+    std::apply([](auto *...P) { ((void)cudaFree(P), ...); },
+               Device_.BackFieldPtrs);
+    cudaFree(Device_.PermScratch);
     cudaFree(Device_.CountPtr);
     Device_ = SoaView<T, Fields...>{};
+  }
+
+  template <size_t... Is>
+  void GatherFieldsDevice(std::index_sequence<Is...>, size_t N, unsigned Grid,
+                          unsigned Block) {
+    ((DeviceGatherKernel<<<Grid, Block>>>(std::get<Is>(Device_.BackFieldPtrs),
+                                          std::get<Is>(Device_.FieldPtrs),
+                                          Device_.PermScratch, N)),
+     ...);
   }
 
   template <size_t I> void CopyOneField(size_t N, cudaMemcpyKind Kind) {
@@ -224,6 +259,41 @@ public:
 
   // Device handle for kernel launches (the cudaMalloc buffers).
   SoaView<T, Fields...> view() const { return Device_; }
+
+  // ---- Device-resident growth (ADR-006 follow-up) --------------------------
+  // Permutation scratch on the device buffer; a kernel fills it, GatherDevice
+  // consumes it. No host round-trip.
+  size_t *DevicePermScratch() { return Device_.PermScratch; }
+
+  // Device-side reorder: scatter Field[Perm[I]] -> Back[I] for I in [0,N), then
+  // swap primary<->back so the reordered arrays are authoritative on device.
+  // Fill DevicePermScratch() first. Stays entirely on the device buffer.
+  void GatherDevice(size_t N) {
+    if (N > 0) {
+      const unsigned Block = 256;
+      const unsigned Grid = static_cast<unsigned>((N + Block - 1) / Block);
+      GatherFieldsDevice(std::index_sequence_for<Fields...>{}, N, Grid, Block);
+      CudaTry(cudaGetLastError(), "GatherDevice launch");
+      CudaTry(cudaDeviceSynchronize(), "GatherDevice sync");
+    }
+    std::swap(Device_.FieldPtrs, Device_.BackFieldPtrs);
+  }
+
+  // Set the device-resident live count (post-compaction extent), no host copy.
+  void SetCountDevice(size_t N) {
+    DeviceSetCountKernel<<<1, 1>>>(Device_.CountPtr, N);
+    CudaTry(cudaGetLastError(), "SetCountDevice launch");
+    CudaTry(cudaDeviceSynchronize(), "SetCountDevice sync");
+  }
+
+  // Read the device-resident live count to host (a kernel may have grown it).
+  size_t DeviceCount() const {
+    size_t N = 0;
+    CudaTry(cudaMemcpy(&N, Device_.CountPtr, sizeof(size_t),
+                       cudaMemcpyDeviceToHost),
+            "D2H device count");
+    return N;
+  }
 
   // Targeted one-field slice sync: copy [Begin, Begin+Count) of field Tag across
   // the boundary without touching the rest of the arena. Used for the small
