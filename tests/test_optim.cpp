@@ -23,7 +23,27 @@
 
 namespace {
 
-using namespace plastix;
+// Targeted usings instead of `using namespace plastix`: the blanket directive
+// pulls plastix::cuda (the in-house GPU-primitives namespace) into scope, which
+// collides with the CUDA toolkit's ::cuda namespace (libcu++ / cooperative
+// groups) when this TU is compiled as CUDA -- "cuda is ambiguous". Naming only
+// what the test uses avoids that.
+namespace alloc = plastix::alloc;
+namespace optim = plastix::optim;
+using plastix::ConnFieldList;
+using plastix::ConnFieldTagsAreUniqueV;
+using plastix::DeadTag;
+using plastix::DefaultNetworkTraits;
+using plastix::FullyConnected;
+using plastix::GetActivation;
+using plastix::GetField;
+using plastix::GetWeight;
+using plastix::Network;
+using plastix::NetworkTraits;
+using plastix::RandomUniformWeight;
+using plastix::UnitFieldList;
+using plastix::WeightTag;
+using plastix::WithOptimizer;
 
 struct GradTag {};
 
