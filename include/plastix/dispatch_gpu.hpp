@@ -20,6 +20,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <vector>
 
 namespace plastix {
 
@@ -77,6 +78,83 @@ template <typename CA> inline size_t DoCompactConnectionsDevice(CA &ConnAlloc) {
   }
   PLASTIX_CUDA_CHECK(cudaFree(Flag));
   return NumLive;
+}
+
+// Device-resident resort by source level (device buffer only). Stamp each edge's
+// SrcLevel from the unit view, histogram levels, then a per-level atomic scatter
+// builds the permutation for GatherDevice. Unit levels are assumed static (no
+// device-resident unit growth), so RecomputeLevels is skipped. Order within a
+// level is atomic-nondeterministic (accepted: the level sums tolerate it).
+template <typename CV, typename UV>
+__global__ void StampSrcLevelKernel(CV CView, UV UView, size_t N) {
+  for (size_t C = blockIdx.x * blockDim.x + threadIdx.x; C < N;
+       C += gridDim.x * blockDim.x)
+    GetField<SrcLevelTag>(CView, C) =
+        static_cast<uint16_t>(GetLevel(UView, GetField<FromIdTag>(CView, C)));
+}
+template <typename CV>
+__global__ void HistogramLevelsKernel(CV CView, uint32_t *Hist, size_t N) {
+  for (size_t C = blockIdx.x * blockDim.x + threadIdx.x; C < N;
+       C += gridDim.x * blockDim.x)
+    atomicAdd(&Hist[GetField<SrcLevelTag>(CView, C)], 1u);
+}
+template <typename CV>
+__global__ void ScatterByLevelKernel(CV CView, uint32_t *WritePos, size_t *Perm,
+                                     size_t N) {
+  for (size_t C = blockIdx.x * blockDim.x + threadIdx.x; C < N;
+       C += gridDim.x * blockDim.x) {
+    uint16_t L = GetField<SrcLevelTag>(CView, C);
+    Perm[atomicAdd(&WritePos[L], 1u)] = C;
+  }
+}
+
+template <typename CA, typename UA, typename RangeT>
+inline void SortConnectionsByLevelDevice(CA &ConnAlloc, UA &UnitAlloc,
+                                         RangeT *Ranges, uint16_t &NumLevels,
+                                         uint16_t MaxLvls) {
+  const size_t N = ConnAlloc.DeviceCount();
+  if (N == 0) {
+    NumLevels = 0;
+    return;
+  }
+  auto CView = ConnAlloc.view();
+  auto UView = UnitAlloc.view();
+  const unsigned Block = 256;
+  const unsigned Grid = static_cast<unsigned>((N + Block - 1) / Block);
+  StampSrcLevelKernel<<<Grid, Block>>>(CView, UView, N);
+  PLASTIX_CUDA_CHECK(cudaGetLastError());
+  uint32_t *Hist = nullptr;
+  PLASTIX_CUDA_CHECK(cudaMalloc(&Hist, MaxLvls * sizeof(uint32_t)));
+  PLASTIX_CUDA_CHECK(cudaMemset(Hist, 0, MaxLvls * sizeof(uint32_t)));
+  HistogramLevelsKernel<<<Grid, Block>>>(CView, Hist, N);
+  PLASTIX_CUDA_CHECK(cudaGetLastError());
+  PLASTIX_CUDA_CHECK(cudaDeviceSynchronize());
+  std::vector<uint32_t> HHist(MaxLvls);
+  PLASTIX_CUDA_CHECK(cudaMemcpy(HHist.data(), Hist, MaxLvls * sizeof(uint32_t),
+                                cudaMemcpyDeviceToHost));
+  std::vector<uint32_t> WBegin(MaxLvls);
+  uint32_t Offset = 0;
+  NumLevels = 0;
+  for (uint16_t L = 0; L < MaxLvls; ++L) {
+    Ranges[L].Begin = Offset;
+    WBegin[L] = Offset;
+    Offset += HHist[L];
+    Ranges[L].End = Offset;
+    if (HHist[L] > 0)
+      NumLevels = static_cast<uint16_t>(L + 1);
+  }
+  uint32_t *WritePos = nullptr;
+  PLASTIX_CUDA_CHECK(cudaMalloc(&WritePos, MaxLvls * sizeof(uint32_t)));
+  PLASTIX_CUDA_CHECK(cudaMemcpy(WritePos, WBegin.data(),
+                                MaxLvls * sizeof(uint32_t),
+                                cudaMemcpyHostToDevice));
+  ScatterByLevelKernel<<<Grid, Block>>>(CView, WritePos,
+                                        ConnAlloc.DevicePermScratch(), N);
+  PLASTIX_CUDA_CHECK(cudaGetLastError());
+  PLASTIX_CUDA_CHECK(cudaDeviceSynchronize());
+  ConnAlloc.GatherDevice(N);
+  PLASTIX_CUDA_CHECK(cudaFree(Hist));
+  PLASTIX_CUDA_CHECK(cudaFree(WritePos));
 }
 
 // Forward pass -- Topological propagation
