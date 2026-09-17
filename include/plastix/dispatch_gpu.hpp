@@ -30,6 +30,55 @@ namespace gpu {
 
 #ifdef PLASTIX_HAS_CUDA
 
+// Device-resident compaction: reclaim tombstoned (DeadTag) connection slots
+// entirely on the device buffer (no host round-trip). Flag live slots, exclusive
+// scan to compacted positions, scatter a permutation, GatherDevice + recount.
+template <typename CV>
+__global__ void FlagLiveKernel(CV View, uint32_t *Flag, size_t N) {
+  for (size_t C = blockIdx.x * blockDim.x + threadIdx.x; C < N;
+       C += gridDim.x * blockDim.x)
+    Flag[C] = GetField<DeadTag>(View, C) ? 0u : 1u;
+}
+template <typename CV>
+__global__ void ScatterLivePermKernel(CV View, const uint32_t *Flag,
+                                      size_t *Perm, size_t N) {
+  for (size_t C = blockIdx.x * blockDim.x + threadIdx.x; C < N;
+       C += gridDim.x * blockDim.x)
+    if (!GetField<DeadTag>(View, C))
+      Perm[Flag[C]] = C;
+}
+
+// Returns the live count. Only touches the device buffer + a transient device
+// scratch; keeps the host staging count in sync so Size() stays correct.
+template <typename CA> inline size_t DoCompactConnectionsDevice(CA &ConnAlloc) {
+  const size_t N = ConnAlloc.DeviceCount();
+  if (N == 0)
+    return 0;
+  auto View = ConnAlloc.view();
+  const unsigned Block = 256;
+  const unsigned Grid = static_cast<unsigned>((N + Block - 1) / Block);
+  uint32_t *Flag = nullptr;
+  PLASTIX_CUDA_CHECK(cudaMalloc(&Flag, (N + 1) * sizeof(uint32_t)));
+  PLASTIX_CUDA_CHECK(cudaMemset(Flag, 0, (N + 1) * sizeof(uint32_t)));
+  FlagLiveKernel<<<Grid, Block>>>(View, Flag, N);
+  PLASTIX_CUDA_CHECK(cudaGetLastError());
+  cuda::ExclusiveScanInPlace(Flag, N + 1);
+  uint32_t NumLive = 0;
+  PLASTIX_CUDA_CHECK(
+      cudaMemcpy(&NumLive, Flag + N, sizeof(uint32_t), cudaMemcpyDeviceToHost));
+  if (NumLive < N) {
+    ScatterLivePermKernel<<<Grid, Block>>>(View, Flag,
+                                           ConnAlloc.DevicePermScratch(), N);
+    PLASTIX_CUDA_CHECK(cudaGetLastError());
+    PLASTIX_CUDA_CHECK(cudaDeviceSynchronize());
+    ConnAlloc.GatherDevice(NumLive);
+    ConnAlloc.SetCountDevice(NumLive);
+    ConnAlloc.SetCount(NumLive);
+  }
+  PLASTIX_CUDA_CHECK(cudaFree(Flag));
+  return NumLive;
+}
+
 // Forward pass -- Topological propagation
 
 template <typename FP, typename UA, typename CA, typename Globals,
