@@ -38,6 +38,24 @@ inline void bind_network(nb::module_ &m) {
              return nb::ndarray<nb::numpy, float>(buf, {o.size()}, owner);
            })
       .def("num_live_conns", &NetworkHandle::num_live_conns)
+      // Zero-copy device path: consume torch CUDA tensors (DLPack), return the
+      // output activations as a torch CUDA view (owner = self keeps it alive).
+      .def("step_device",
+           [](NetworkHandle &h,
+              nb::ndarray<const float, nb::ndim<1>, nb::c_contig,
+                          nb::device::cuda>
+                  x,
+              nb::ndarray<const float, nb::ndim<1>, nb::c_contig,
+                          nb::device::cuda>
+                  y) { h.step_device(x.data(), y.data()); })
+      .def("output_device",
+           [](nb::object self) {
+             auto &h = nb::cast<NetworkHandle &>(self);
+             size_t n = h.num_output();
+             return nb::ndarray<nb::pytorch, const float>(
+                 h.output_device(), {n}, self, {}, nb::dtype<float>(),
+                 nb::device::cuda::value, 0);
+           })
       .def_prop_ro("num_input", &NetworkHandle::num_input)
       .def_prop_ro("num_output", &NetworkHandle::num_output)
       .def_prop_ro("step_count", &NetworkHandle::step_count)

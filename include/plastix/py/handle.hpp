@@ -24,6 +24,12 @@ struct NetworkHandle {
   virtual std::span<const float> output() = 0;
   // Live (non-dead) connection count -- the DeepR trajectory metric.
   virtual size_t num_live_conns() = 0;
+
+  // Zero-copy device path (device-resident CUDA build only; throws otherwise):
+  // x/y are device pointers (e.g. torch CUDA tensors), output_device() returns a
+  // device pointer to the output activations (length num_output()).
+  virtual void step_device(const float *dx, const float *dy) = 0;
+  virtual const float *output_device() = 0;
 };
 
 } // namespace plastix::py

@@ -11,6 +11,7 @@
 
 #include <plastix/plastix.hpp>
 
+#include <stdexcept>
 #include <type_traits>
 #include <utility>
 
@@ -51,6 +52,26 @@ public:
       if (!plastix::GetField<plastix::DeadTag>(C, K))
         ++N;
     return N;
+  }
+
+  void step_device(const float *dx, const float *dy) override {
+#ifdef PLASTIX_HAS_CUDA
+    if constexpr (alloc::IsDeviceResidentV<ConnAllocT>) {
+      Net_.DoStepDevice(dx, dy);
+      return;
+    }
+#endif
+    (void)dx;
+    (void)dy;
+    throw std::runtime_error("step_device requires a device-resident CUDA build");
+  }
+
+  const float *output_device() override {
+#ifdef PLASTIX_HAS_CUDA
+    if constexpr (alloc::IsDeviceResidentV<ConnAllocT>)
+      return Net_.GetOutputDevice();
+#endif
+    throw std::runtime_error("output_device requires a device-resident CUDA build");
   }
 };
 
