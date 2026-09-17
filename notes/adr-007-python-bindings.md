@@ -378,3 +378,28 @@ a stream parameter is the cheaper first win.
   `step_device`/`output_device`/`field(...)` as torch views; MNIST `DataLoader`
   loop; measure per-sample time vs `main_deepr` and confirm with `nsys` that no
   per-step H2D/D2H occurs beyond requested metrics.
+
+## Realized (as built; deviations from the research design above)
+
+- **M0 DONE (2026-09-17, PR #13 `sir-nochill/py-bindings`).** Shipped
+  `include/plastix/py/{handle,adapter,module}.hpp`:
+  - `NetworkHandle` (nanobind-free) currently exposes `step(x,y)`, `output()`,
+    `num_live_conns()`, and `num_input/num_output/step_count/device_resident`
+    props -- a minimal M0 surface. **Not yet built** (deferred): `Network(**kwargs)`
+    ctor, `step_batch`, `globals`, generic `field(name)` -- the shim hardcodes the
+    DeepR config and exposes `create()`. Add these for richer metrics/config.
+  - `Adapter<Net>` requires `DoStep`/`GetOutput`/`GetConnAlloc`/`GetStep`;
+    `num_input/output` are ctor args (Network doesn't expose them uniformly).
+  - `module.hpp` = `bind_network()` + `PLASTIX_PY_MODULE(name, factory)`; needs
+    `#include <nanobind/stl/unique_ptr.h>` for the factory return.
+- **Build:** the binding project lives in the bench
+  (`results/plastix-bench/15_deepr_multimnist/pybind/`: pyproject + CMakeLists +
+  `src/deepr_py.cpp` + `drive.py`), NOT in the plastix tree. `nanobind_add_module`
+  target installs at package root (`DESTINATION .`) so `import deepr_py` works.
+- **Env gotcha:** the host Python is 3.14 (no torch/jax/scikit-build-core wheels
+  yet). Build in a `uv venv --python 3.12`; `uv pip install -e .` drives
+  scikit-build-core. nanobind 3.0.1 is system-available.
+- **M0 gate relaxed:** exact per-step trace parity needs the identical input RNG
+  stream (main_deepr uses `std::mt19937` + `normal_distribution`), impractical to
+  match from numpy; the stable live-conn count (288, matching main_deepr) is the
+  CPU-parity signal. A C++-vs-Python identical-input check is a later refinement.
