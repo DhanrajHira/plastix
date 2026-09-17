@@ -71,6 +71,12 @@ inline void FreeStorage(void *P, size_t Bytes) {
 // Forward declaration so SoaView can befriend its owning allocator.
 template <typename T, typename... Fields> class SOAAllocator;
 
+#ifdef PLASTIX_HAS_CUDA
+// Opt-in device-resident allocator (ADR-006, defined in device_alloc.hpp); it
+// pokes SoaView internals for the host-staging / device buffer pair.
+template <typename T, typename... Fields> class DeviceResidentSOA;
+#endif
+
 // Non-owning, device-copyable handle over the SOA arenas: plain pointers only,
 // never frees (SOAAllocator owns storage), so it passes into kernels by value.
 //
@@ -91,6 +97,9 @@ template <typename T, typename... Fields> class SoaView {
   }
 
   friend class SOAAllocator<T, Fields...>;
+#ifdef PLASTIX_HAS_CUDA
+  friend class DeviceResidentSOA<T, Fields...>;
+#endif
 
 public:
   SoaView() = default;

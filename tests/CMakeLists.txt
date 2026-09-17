@@ -11,7 +11,7 @@ add_test(NAME ascii_lint
 if(PLASTIX_ENABLE_CUDA)
     # Lightweight unit tests for the in-house parallel primitives. Built as a
     # separate executable so the CPU build stays unchanged.
-    add_executable(plastix_cuda_tests test_cuda_primitives.cpp)
+    add_executable(plastix_cuda_tests test_cuda_primitives.cpp test_device_resident.cpp)
     target_link_libraries(plastix_cuda_tests PRIVATE plastix GTest::gtest_main)
     plastix_enable_cuda_on_target(plastix_cuda_tests)
     add_test(NAME plastix_cuda_tests COMMAND plastix_cuda_tests)
