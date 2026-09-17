@@ -434,6 +434,12 @@ inline bool DoAddConnections(UA &UnitAlloc, CA &ConnAlloc, PA &ProposalAlloc,
       PLASTIX_CUDA_CHECK_KERNEL();
       PLASTIX_CUDA_CHECK(cudaDeviceSynchronize());
       Committed = true;
+      // Device-resident: AllocateMany grew only the host staging count, but the
+      // commit wrote the new edges into the device buffer (view()) at Range.first
+      // (host==device count invariant). Mirror the grown count to the device so
+      // the committed edges fall inside the device extent for later phases.
+      if constexpr (alloc::IsDeviceResidentV<CA>)
+        ConnAlloc.SetCountDevice(ConnAlloc.Size());
     }
   }
   PLASTIX_CUDA_CHECK(cudaFree(Flags));
@@ -609,6 +615,13 @@ inline void DoResetGlobalOnDevice(G *) {}
 template <typename Loss, typename UV, typename Globals>
 inline void DoCalculateLossOnDevice(UV, UnitRange, const float *, size_t,
                                     Globals *, void * = nullptr, bool = true) {}
+
+template <typename CA> inline size_t DoCompactConnectionsDevice(CA &) {
+  return 0;
+}
+template <typename CA, typename UA, typename RangeT>
+inline void SortConnectionsByLevelDevice(CA &, UA &, RangeT *, uint16_t &,
+                                         uint16_t) {}
 
 #endif // PLASTIX_HAS_CUDA
 
