@@ -243,6 +243,10 @@ public:
     if constexpr (std::is_same_v<typename Traits::ResetGlobal,
                                  NoResetGlobalState>)
       return;
+    else if constexpr (HasCuda && alloc::IsDeviceResidentV<UnitAllocator>)
+      // Keep Globals device-resident: reset it on the device instead of
+      // dereferencing it on the host every step (avoids per-step migration).
+      gpu::DoResetGlobalOnDevice<typename Traits::ResetGlobal>(Globals);
     else
       Traits::ResetGlobal::Reset(*Globals);
   }

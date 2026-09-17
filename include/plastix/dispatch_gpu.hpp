@@ -377,6 +377,19 @@ inline void RecomputeLevels(UA &UnitAlloc, CA &ConnAlloc, KA &KahnAlloc,
   PLASTIX_CUDA_CHECK(cudaFree(NextSize));
 }
 
+// Device-side global-state reset (ADR-006): one thread applies ResetPolicy to
+// the device-resident Globals so it is never host-touched during the loop.
+template <typename ResetPolicy, typename G>
+__global__ void ResetGlobalKernel(G *Globals) {
+  ResetPolicy::Reset(*Globals);
+}
+template <typename ResetPolicy, typename G>
+inline void DoResetGlobalOnDevice(G *Globals) {
+  ResetGlobalKernel<ResetPolicy><<<1, 1>>>(Globals);
+  PLASTIX_CUDA_CHECK_KERNEL();
+  PLASTIX_CUDA_CHECK(cudaDeviceSynchronize());
+}
+
 #else // !PLASTIX_HAS_CUDA
 
 // Host-build stubs: same signatures so dispatch-site lookup resolves;
@@ -425,6 +438,9 @@ inline bool DoAddConnections(UA &, CA &, PA &, Globals *, uint16_t) {
 
 template <typename UA, typename CA, typename KA>
 inline void RecomputeLevels(UA &, CA &, KA &, size_t) {}
+
+template <typename ResetPolicy, typename G>
+inline void DoResetGlobalOnDevice(G *) {}
 
 #endif // PLASTIX_HAS_CUDA
 
