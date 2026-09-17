@@ -154,6 +154,8 @@ public:
 #ifdef PLASTIX_HAS_CUDA
     if (CaptureStream_)
       PLASTIX_CUDA_CHECK(cudaStreamDestroy(CaptureStream_));
+    if (DeviceTargets_)
+      PLASTIX_CUDA_CHECK(cudaFree(DeviceTargets_));
 #endif
   }
 
@@ -242,7 +244,23 @@ public:
     else {
       if (Targets.empty())
         return;
-      Traits::Loss::CalculateLoss(UnitAlloc, OutputRange, Targets, *Globals);
+      if constexpr (HasCuda && alloc::IsDeviceResidentV<UnitAllocator>) {
+        // Device-resident: upload the small target slice and run the loss on the
+        // device view. Activation and BackwardAcc stay device-resident (no D2H
+        // of the outputs, no H2D of the gradient), and no host code interleaves
+        // between forward and backward -- see ADR-007/008.
+        const size_t N = Targets.size();
+        if (!DeviceTargets_)
+          PLASTIX_CUDA_CHECK(cudaMalloc(reinterpret_cast<void **>(&DeviceTargets_),
+                                        OutputRange.Size() * sizeof(float)));
+        PLASTIX_CUDA_CHECK(cudaMemcpy(DeviceTargets_, Targets.data(),
+                                      N * sizeof(float),
+                                      cudaMemcpyHostToDevice));
+        gpu::DoCalculateLossOnDevice<typename Traits::Loss>(
+            UnitAlloc.view(), OutputRange, DeviceTargets_, N, Globals);
+      } else {
+        Traits::Loss::CalculateLoss(UnitAlloc, OutputRange, Targets, *Globals);
+      }
     }
   }
 
@@ -419,6 +437,10 @@ public:
     return {Base, OutputRange.Size()};
   }
 
+  // Structural accessors (needed by the Python binding / device data path).
+  UnitRange GetOutputRange() const { return OutputRange; }
+  size_t GetNumInput() const { return NumInput; }
+
   // Device-resident: refresh the output activations into the host staging mirror
   // so GetOutput() reads current values. A no-op on the managed/mmap backend.
   // (DoCalculateLoss already pulls this slice each step; call this before
@@ -532,6 +554,8 @@ private:
   gpu::CudaGraph ForwardGraph_;
   cudaStream_t CaptureStream_ = nullptr;
   size_t ForwardGraphSize_ = static_cast<size_t>(-1);
+  // Device target buffer for the device-side loss (ADR-007/008).
+  float *DeviceTargets_ = nullptr;
 #endif
 };
 

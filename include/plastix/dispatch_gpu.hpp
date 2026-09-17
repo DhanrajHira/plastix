@@ -6,8 +6,11 @@
 // stubs).
 
 #include "plastix/conn.hpp"
+#include "plastix/layers.hpp"
 #include "plastix/macros.hpp"
 #include "plastix/unit_state.hpp"
+
+#include <span>
 
 #ifdef PLASTIX_HAS_CUDA
 #include "plastix/cuda_kernels.hpp"
@@ -399,6 +402,30 @@ inline void DoResetGlobalOnDevice(G *Globals) {
   PLASTIX_CUDA_CHECK(cudaDeviceSynchronize());
 }
 
+// Device-side loss (ADR-007/008): run the (device-callable) loss policy on the
+// device view so it reads Activation and writes BackwardAcc in place -- no D2H
+// of the output activations, no H2D of the gradient. The policy iterates the
+// whole output range internally, so one thread runs it (output units are few).
+template <typename Loss, typename UV, typename Globals>
+__global__ void CalculateLossKernel(UV Unit, UnitRange Out,
+                                    const float *Targets, size_t N,
+                                    Globals *G) {
+  if (blockIdx.x == 0 && threadIdx.x == 0)
+    Loss::CalculateLoss(Unit, Out, std::span<const float>(Targets, N), *G);
+}
+
+template <typename Loss, typename UV, typename Globals>
+inline void DoCalculateLossOnDevice(UV Unit, UnitRange Out,
+                                    const float *DeviceTargets, size_t N,
+                                    Globals *G, void *Stream = nullptr,
+                                    bool Sync = true) {
+  cudaStream_t S = static_cast<cudaStream_t>(Stream);
+  CalculateLossKernel<Loss><<<1, 1, 0, S>>>(Unit, Out, DeviceTargets, N, G);
+  PLASTIX_CUDA_CHECK_KERNEL();
+  if (Sync)
+    PLASTIX_CUDA_CHECK(cudaDeviceSynchronize());
+}
+
 #else // !PLASTIX_HAS_CUDA
 
 // Host-build stubs: same signatures so dispatch-site lookup resolves;
@@ -452,6 +479,10 @@ inline void RecomputeLevels(UA &, CA &, KA &, size_t) {}
 
 template <typename ResetPolicy, typename G>
 inline void DoResetGlobalOnDevice(G *) {}
+
+template <typename Loss, typename UV, typename Globals>
+inline void DoCalculateLossOnDevice(UV, UnitRange, const float *, size_t,
+                                    Globals *, void * = nullptr, bool = true) {}
 
 #endif // PLASTIX_HAS_CUDA
 
