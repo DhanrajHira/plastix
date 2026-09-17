@@ -30,13 +30,18 @@ two boundaries: **construction** (host builds a staging mirror, one H2D upload)
 and **readback** (D2H of the small slices host code needs -- outputs, metrics,
 the live count). During the DoStep loop the arena lives only on the device.
 
-Scope for this ADR (agreed with Ayrton):
-- **In:** allocator split (device buffer + host staging), atomic-count readback,
-  construction upload + output readback, a `device_ptr` compile-time host-deref
-  guard, RAII/`Defer` leak safety.
-- **Deferred:** lazy backing (accept eager `cudaMalloc` over-allocation for now;
-  VMM/`cudaMallocAsync` pool is a later ADR), multi-GPU per-device arenas, and
-  revisiting the CPU (`mmap`) backend.
+Scope for this ADR (confirmed with Ayrton 2026-09-16):
+- **In:** allocator split (eager `cudaMalloc` device buffer + host staging),
+  atomic-count readback, construction upload + output readback, a `device_ptr`
+  compile-time host-deref guard, RAII/`Defer` leak safety. **No host access to the
+  arena on the GPU path** during execution.
+- **Opt-in:** networks select device-residency; the managed/`mmap` default is
+  unchanged so the CPU-touching library keeps building.
+- **Deferred (follow-ups):**
+  - **Lazy backing.** Eager `cudaMalloc` over-allocates the whole `Capacity`
+    arena; accepted for now (Ayrton: not a concern yet). A later ADR revisits with
+    the CUDA VMM API / `cudaMallocAsync` pool once we know the eager path works.
+  - Multi-GPU per-device arenas; revisiting the CPU (`mmap`) backend.
 
 ## Design
 
@@ -112,10 +117,15 @@ is cheap even per step).
   backend keeps `mmap`. The `device_ptr` guard keeps the two from being conflated.
 
 ## Sequenced work
-1. `device_ptr.hpp` + `defer.hpp` (utilities) -- this change.
-2. Opt-in device-resident allocator mode (buffer + staging + sync) in `alloc.hpp`.
+1. [done] `device_ptr.hpp` + `defer.hpp` (utilities); guard validated under nvcc.
+2. [done] Opt-in device-resident allocator (`DeviceResidentSOA` in
+   `device_alloc.hpp`: host-staging + `cudaMalloc` device SoaView, RAII + `Defer`
+   teardown, `PushToDevice`/`PullToHost`). Validated on cdol01 (RTX 5000 Ada,
+   sm_89, CUDA 13.3): 3 round-trip/capacity/move tests pass, existing CUDA tests
+   unregressed; `compute-sanitizer memcheck --leak-check full` = 0 bytes leaked /
+   0 errors, `initcheck` = 0 errors.
 3. Route DEEP R (already fully kernelized incl. the device rewire) onto it;
    confine host loss/metrics to output-slice readback.
-4. Validate on Narval: `initcheck`/`memcheck --leak-check`, then the GPU DEEP R
-   run; nsys migration counters to confirm the thrashing is gone.
+4. Validate on Narval: the GPU DEEP R run; nsys migration counters to confirm the
+   thrashing is gone.
 5. Later ADRs: lazy VMM backing; multi-GPU; CPU-backend reconciliation.
