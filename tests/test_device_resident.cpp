@@ -74,6 +74,41 @@ TEST(DeviceResidentSOA, MoveTransfersOwnership) {
   // A is moved-from (nulled); its destructor must be a no-op (no double free).
 }
 
+// Fills the device permutation scratch with a reversal so GatherDevice must
+// reverse the arrays across every field.
+__global__ void FillReversePerm(size_t *Perm, size_t N) {
+  size_t I = blockIdx.x * blockDim.x + threadIdx.x;
+  if (I < N)
+    Perm[I] = N - 1 - I;
+}
+
+// Exercises the device-resident growth foundation: fill the permutation scratch
+// on device, GatherDevice (scatter + swap) entirely on the device buffer, then
+// read back and confirm every field was reordered.
+TEST(DeviceResidentSOA, GatherDeviceReordersOnDevice) {
+  const size_t N = 128;
+  DRS A(N);
+  for (size_t I = 0; I < N; ++I) {
+    auto Id = A.Allocate();
+    A.Get<WeightTag>(Id) = static_cast<float>(I) + 1.0f;
+    A.Get<IdTag>(Id) = static_cast<uint32_t>(I);
+  }
+  A.PushToDevice();
+
+  FillReversePerm<<<static_cast<unsigned>((N + 63) / 64), 64>>>(
+      A.DevicePermScratch(), N);
+  ASSERT_EQ(cudaDeviceSynchronize(), cudaSuccess);
+  A.GatherDevice(N);
+  A.SetCountDevice(N);
+  A.PullToHost();
+
+  for (size_t I = 0; I < N; ++I) {
+    EXPECT_FLOAT_EQ(A.Get<WeightTag>(I), static_cast<float>(N - 1 - I) + 1.0f)
+        << "at " << I;
+    EXPECT_EQ(A.Get<IdTag>(I), static_cast<uint32_t>(N - 1 - I)) << "at " << I;
+  }
+}
+
 } // namespace
 
 #endif // PLASTIX_HAS_CUDA
