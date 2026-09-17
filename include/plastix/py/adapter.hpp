@@ -40,7 +40,13 @@ public:
     Net_.DoStep(X, Y);
   }
 
-  std::span<const float> output() override { return Net_.GetOutput(); }
+  std::span<const float> output() override {
+    // Device-resident nets keep activations on device; refresh host staging so
+    // GetOutput() is current. No-op internally on the managed/CPU backend.
+    if constexpr (requires { Net_.SyncOutputToHost(); })
+      Net_.SyncOutputToHost();
+    return Net_.GetOutput();
+  }
 
   size_t num_live_conns() override {
     auto &C = Conn();
