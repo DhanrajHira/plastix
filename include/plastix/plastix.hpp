@@ -345,7 +345,10 @@ public:
     if constexpr (!NetworkShrinks<Traits> || !HasConnAdd<Traits>)
       return;
     else {
-      cpu::DoCompactConnections(ConnAlloc);
+      if constexpr (alloc::IsDeviceResidentV<ConnAllocator>)
+        gpu::DoCompactConnectionsDevice(ConnAlloc); // device buffer, no round-trip
+      else
+        cpu::DoCompactConnections(ConnAlloc);
       // Compaction preserves the relative order of live connections
       if constexpr (Traits::Model == Propagation::Topological)
         NeedsResort = true;
@@ -522,6 +525,14 @@ private:
   }
 
   void SortConnectionsByLevel() {
+    if constexpr (alloc::IsDeviceResidentV<ConnAllocator>) {
+      // Device-resident: reorder by level entirely on the device buffer (unit
+      // levels are static, so RecomputeLevels is not needed).
+      gpu::SortConnectionsByLevelDevice(ConnAlloc, UnitAlloc, Ranges.data(),
+                                        NumLevels, MaxLevels);
+      NeedsResort = false;
+      return;
+    }
     RecomputeLevels();
 
     size_t N = ConnAlloc.Size();

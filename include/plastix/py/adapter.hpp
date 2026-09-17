@@ -62,22 +62,24 @@ public:
 
   void step_device(const float *dx, const float *dy) override {
 #ifdef PLASTIX_HAS_CUDA
-    if constexpr (alloc::IsDeviceResidentV<ConnAllocT>) {
+    // Zero-copy device step: only when the net exposes DoStepDevice (a net may be
+    // device-resident yet drive growth via the host DoStep path).
+    if constexpr (requires { Net_.DoStepDevice(dx, dy); }) {
       Net_.DoStepDevice(dx, dy);
       return;
     }
 #endif
     (void)dx;
     (void)dy;
-    throw std::runtime_error("step_device requires a device-resident CUDA build");
+    throw std::runtime_error("step_device: net has no zero-copy device step");
   }
 
   const float *output_device() override {
 #ifdef PLASTIX_HAS_CUDA
-    if constexpr (alloc::IsDeviceResidentV<ConnAllocT>)
+    if constexpr (requires { Net_.GetOutputDevice(); })
       return Net_.GetOutputDevice();
 #endif
-    throw std::runtime_error("output_device requires a device-resident CUDA build");
+    throw std::runtime_error("output_device: net has no device output pointer");
   }
 };
 
