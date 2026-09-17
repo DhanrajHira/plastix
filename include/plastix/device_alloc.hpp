@@ -214,9 +214,35 @@ public:
 
   size_t Size() const { return Host_.Size(); }
   size_t GetCapacity() const { return Host_.GetCapacity(); }
+  size_t *PermutationScratch() { return Host_.PermutationScratch(); }
+
+  // Host-staging reorder (construction-time resort). Operates on the staging
+  // mirror; a following PushToDevice makes the reordered data authoritative.
+  void Gather(size_t N) { Host_.Gather(N); }
+  // Set the live count on the staging mirror; PushToDevice syncs it to device.
+  void SetCount(size_t N) { Host_.SetCount(N); }
 
   // Device handle for kernel launches (the cudaMalloc buffers).
   SoaView<T, Fields...> view() const { return Device_; }
+
+  // Targeted one-field slice sync: copy [Begin, Begin+Count) of field Tag across
+  // the boundary without touching the rest of the arena. Used for the small
+  // per-step host<->device exchanges (input activations in, output slice out)
+  // so the bulk of the arena stays device-resident.
+  template <typename Tag> void PushFieldSlice(size_t Begin, size_t Count) {
+    auto *H = Host_.template GetArrayFor<Tag>();
+    auto *D = Device_.template GetArrayFor<Tag>();
+    CudaTry(cudaMemcpy(D + Begin, H + Begin, Count * sizeof(*H),
+                       cudaMemcpyHostToDevice),
+            "H2D field slice");
+  }
+  template <typename Tag> void PullFieldSlice(size_t Begin, size_t Count) {
+    auto *H = Host_.template GetArrayFor<Tag>();
+    auto *D = Device_.template GetArrayFor<Tag>();
+    CudaTry(cudaMemcpy(H + Begin, D + Begin, Count * sizeof(*H),
+                       cudaMemcpyDeviceToHost),
+            "D2H field slice");
+  }
 
   // Explicit sync across the host/device boundary (no coherence by design).
   void PushToDevice() {
@@ -238,6 +264,9 @@ public:
                cudaMemcpyDeviceToHost);
   }
 };
+
+template <typename T, typename... Fields>
+inline constexpr bool IsDeviceResidentV<DeviceResidentSOA<T, Fields...>> = true;
 
 } // namespace alloc
 } // namespace plastix

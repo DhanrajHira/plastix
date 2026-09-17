@@ -77,6 +77,11 @@ template <typename T, typename... Fields> class SOAAllocator;
 template <typename T, typename... Fields> class DeviceResidentSOA;
 #endif
 
+// True only for device-resident allocators (ADR-006). Lets host-only sync points
+// (PushToDevice/slice copies) be `if constexpr`-guarded so the managed/mmap path
+// compiles them out entirely. Specialized in device_alloc.hpp.
+template <typename A> inline constexpr bool IsDeviceResidentV = false;
+
 // Non-owning, device-copyable handle over the SOA arenas: plain pointers only,
 // never frees (SOAAllocator owns storage), so it passes into kernels by value.
 //

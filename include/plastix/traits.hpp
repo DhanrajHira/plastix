@@ -270,16 +270,47 @@ template <typename Global = EmptyGlobalState> struct DefaultNetworkTraits {
   static constexpr bool ReverseAdjForward = false;
 };
 
+// Allocator backend selection (ADR-006). A traits type opts into the
+// device-resident allocator with `static constexpr bool DeviceResident = true`;
+// absent or false keeps the default managed/mmap SOAAllocator. The
+// device-resident backend exists only under CUDA, so DeviceResident=true on a
+// CPU build still resolves to SOAAllocator (below).
+template <typename T>
+concept HasDeviceResidentFlag = requires {
+  { T::DeviceResident } -> std::convertible_to<bool>;
+};
+template <typename T> consteval bool WantsDeviceResident() {
+  if constexpr (HasDeviceResidentFlag<T>)
+    return T::DeviceResident;
+  else
+    return false;
+}
+
+// Maps the selection bool to an allocator template usable as a
+// template-template argument. The DeviceResidentSOA branch is CUDA-only.
+template <bool DeviceResident> struct AllocSelector {
+  template <class Entity, class... Fields>
+  using Alloc = alloc::SOAAllocator<Entity, Fields...>;
+};
+#ifdef PLASTIX_HAS_CUDA
+template <> struct AllocSelector<true> {
+  template <class Entity, class... Fields>
+  using Alloc = alloc::DeviceResidentSOA<Entity, Fields...>;
+};
+#endif
+
 // Resolve the unit allocator for a given traits type.
 template <typename T>
-using UnitAllocFor =
-    MakeUnitAllocatorFrom<typename T::ForwardPass::Accumulator,
-                          typename T::BackwardPass::Accumulator,
-                          typename T::ExtraUnitFields>;
+using UnitAllocFor = MakeUnitAllocatorFromWith<
+    AllocSelector<WantsDeviceResident<T>()>::template Alloc,
+    typename T::ForwardPass::Accumulator,
+    typename T::BackwardPass::Accumulator, typename T::ExtraUnitFields>;
 
 // Resolve the connection allocator for a given traits type.
 template <typename T>
-using ConnAllocFor = MakeConnAllocatorFrom<typename T::ExtraConnFields>;
+using ConnAllocFor = MakeConnAllocatorFromWith<
+    AllocSelector<WantsDeviceResident<T>()>::template Alloc,
+    typename T::ExtraConnFields>;
 
 // Traits inspection helpers for compile-time behaviour optimizations.
 

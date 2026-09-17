@@ -44,23 +44,34 @@ template <typename... Fields> struct ConnFieldList {};
 // Connection allocator parameterized by extra fields; core fields (FromId,
 // ToId, Dead, SrcLevel) are always present, ExtraFields... are user SOAField
 // entries.
+// Allocator-template-parameterized form: Alloc is SOAAllocator (default) or the
+// device-resident allocator (ADR-006), selected by traits. Both share the
+// <Entity, Fields...> signature, so they are interchangeable here.
+template <template <class, class...> class Alloc, typename... ExtraFields>
+using MakeConnAllocatorWith =
+    Alloc<ConnectionState, alloc::SOAField<FromIdTag, uint32_t>,
+          alloc::SOAField<ToIdTag, uint32_t>, alloc::SOAField<DeadTag, bool>,
+          alloc::SOAField<SrcLevelTag, uint16_t>, ExtraFields...>;
+
 template <typename... ExtraFields>
 using MakeConnAllocator =
-    alloc::SOAAllocator<ConnectionState, alloc::SOAField<FromIdTag, uint32_t>,
-                        alloc::SOAField<ToIdTag, uint32_t>,
-                        alloc::SOAField<DeadTag, bool>,
-                        alloc::SOAField<SrcLevelTag, uint16_t>, ExtraFields...>;
+    MakeConnAllocatorWith<alloc::SOAAllocator, ExtraFields...>;
 
-// Helper to unpack a ConnFieldList into MakeConnAllocator.
-template <typename FL> struct MakeConnAllocatorFromList;
+// Helper to unpack a ConnFieldList into MakeConnAllocatorWith.
+template <template <class, class...> class Alloc, typename FL>
+struct MakeConnAllocatorFromListWith;
 
-template <typename... Extra>
-struct MakeConnAllocatorFromList<ConnFieldList<Extra...>> {
-  using type = MakeConnAllocator<Extra...>;
+template <template <class, class...> class Alloc, typename... Extra>
+struct MakeConnAllocatorFromListWith<Alloc, ConnFieldList<Extra...>> {
+  using type = MakeConnAllocatorWith<Alloc, Extra...>;
 };
 
+template <template <class, class...> class Alloc, typename FL>
+using MakeConnAllocatorFromWith =
+    typename MakeConnAllocatorFromListWith<Alloc, FL>::type;
+
 template <typename FL>
-using MakeConnAllocatorFrom = typename MakeConnAllocatorFromList<FL>::type;
+using MakeConnAllocatorFrom = MakeConnAllocatorFromWith<alloc::SOAAllocator, FL>;
 
 // Convenience alias for the default case (includes Weight).
 using ConnStateAllocator = MakeConnAllocator<alloc::SOAField<WeightTag, float>>;

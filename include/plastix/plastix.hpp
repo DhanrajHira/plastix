@@ -17,6 +17,7 @@
 #include "plastix/macros.hpp"
 
 #ifdef PLASTIX_HAS_CUDA
+#include "plastix/device_alloc.hpp"
 #include <cuda_runtime.h>
 #endif
 
@@ -118,6 +119,12 @@ public:
 #endif
       RebuildReverseAdjacency();
     }
+    // Device-resident backend (ADR-006): construction built the host staging
+    // mirror; one upload makes the device buffers authoritative for the run.
+    if constexpr (alloc::IsDeviceResidentV<UnitAllocator>) {
+      UnitAlloc.PushToDevice();
+      ConnAlloc.PushToDevice();
+    }
   }
 
   Network(size_t InputDim, size_t OutputDim = 1)
@@ -169,6 +176,10 @@ public:
 
     for (size_t I = 0; I < NumInput; ++I)
       GetActivation(UnitAlloc, I) = Inputs[I];
+    // Device-resident: push only the just-written input activations; the rest of
+    // the arena stays device-resident (kernels overwrite non-input activations).
+    if constexpr (alloc::IsDeviceResidentV<UnitAllocator>)
+      UnitAlloc.template PushFieldSlice<ActivationTag>(0, NumInput);
 
     // GPU kernels currently require Accumulator=float (atomicAdd<float> is
     // the only supported Combine). Non-float accumulators run the host loop.
@@ -372,6 +383,16 @@ public:
   std::span<const float> GetOutput() const {
     const float *Base = &GetActivation(UnitAlloc, OutputRange.Begin);
     return {Base, OutputRange.Size()};
+  }
+
+  // Device-resident: refresh the output activations into the host staging mirror
+  // so GetOutput() reads current values. A no-op on the managed/mmap backend.
+  // (DoCalculateLoss already pulls this slice each step; call this before
+  // GetOutput on an inference-only path with no loss.)
+  void SyncOutputToHost() {
+    if constexpr (alloc::IsDeviceResidentV<UnitAllocator>)
+      UnitAlloc.template PullFieldSlice<ActivationTag>(OutputRange.Begin,
+                                                       OutputRange.Size());
   }
 
   auto &GetConnAlloc() { return ConnAlloc; }
