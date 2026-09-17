@@ -178,65 +178,50 @@ public:
   size_t GetStep() const { return Step; }
 
   void DoForwardPass(std::span<const float> Inputs) {
-    using FP = typename Traits::ForwardPass;
-    using Acc = typename FP::Accumulator;
-
     for (size_t I = 0; I < NumInput; ++I)
       GetActivation(UnitAlloc, I) = Inputs[I];
     // Device-resident: push only the just-written input activations; the rest of
     // the arena stays device-resident (kernels overwrite non-input activations).
     if constexpr (alloc::IsDeviceResidentV<UnitAllocator>)
       UnitAlloc.template PushFieldSlice<ActivationTag>(0, NumInput);
-
-    // Opt-in CUDA-graph capture of the forward kernel sequence (ADR-008 P0):
-    // requires the device-resident backend (stable device pointers; the input
-    // slice is refreshed above, before the graph replays).
-    constexpr bool UseGraph = HasCuda && std::is_same_v<Acc, float> &&
-                              WantsCudaGraph<Traits>() &&
-                              alloc::IsDeviceResidentV<UnitAllocator>;
-
-    // GPU kernels currently require Accumulator=float (atomicAdd<float> is
-    // the only supported Combine). Non-float accumulators run the host loop.
-    if constexpr (Traits::Model == Propagation::Topological) {
-      if (NeedsResort) {
-        SortConnectionsByLevel();
-        if constexpr (UseGraph)
-          ForwardGraph_.Reset(); // level ranges changed; re-capture
-      }
-      if constexpr (UseGraph)
-        LaunchForwardGraph([&](void *S, bool Sync) {
-          gpu::DoForwardTopological<FP>(UnitAlloc, ConnAlloc, Globals, NumInput,
-                                        Ranges, NumLevels, S, Sync);
-        });
-      else if constexpr (HasCuda && std::is_same_v<Acc, float>)
-        gpu::DoForwardTopological<FP>(UnitAlloc, ConnAlloc, Globals, NumInput,
-                                      Ranges, NumLevels);
-      else
-        cpu::DoForwardTopological<FP>(UnitAlloc, ConnAlloc, Globals, NumInput,
-                                      Ranges, NumLevels);
-    } else {
-      if constexpr (UseGraph && Traits::ReverseAdjForward)
-        LaunchForwardGraph([&](void *S, bool Sync) {
-          gpu::DoForwardReverseAdj<FP>(UnitAlloc, ConnAlloc, Globals, NumInput,
-                                       RevOffsets, RevIncoming, S, Sync);
-        });
-      else if constexpr (UseGraph)
-        LaunchForwardGraph([&](void *S, bool Sync) {
-          gpu::DoForwardPipeline<FP>(UnitAlloc, ConnAlloc, Globals, NumInput, S,
-                                     Sync);
-        });
-      else if constexpr (HasCuda && std::is_same_v<Acc, float> &&
-                         Traits::ReverseAdjForward)
-        gpu::DoForwardReverseAdj<FP>(UnitAlloc, ConnAlloc, Globals, NumInput,
-                                     RevOffsets, RevIncoming);
-      else if constexpr (HasCuda && std::is_same_v<Acc, float>)
-        gpu::DoForwardPipeline<FP>(UnitAlloc, ConnAlloc, Globals, NumInput);
-      else
-        cpu::DoForwardPipeline<FP>(UnitAlloc, ConnAlloc, Globals, NumInput);
-    }
+    RunForward();
 
     ++Step;
   }
+
+#ifdef PLASTIX_HAS_CUDA
+  // Device-input forward (ADR-007 M2): the input already lives on the device
+  // (e.g. a torch CUDA tensor). Copies the input slice device->device into the
+  // activation arena -- no host round-trip -- then runs the forward.
+  void DoForwardPassDevice(const float *DeviceInput) {
+    static_assert(alloc::IsDeviceResidentV<UnitAllocator>,
+                  "DoForwardPassDevice requires the device-resident backend");
+    float *Act = UnitAlloc.view().template GetArrayFor<ActivationTag>();
+    PLASTIX_CUDA_CHECK(cudaMemcpy(Act, DeviceInput, NumInput * sizeof(float),
+                                  cudaMemcpyDeviceToDevice));
+    RunForward();
+    ++Step;
+  }
+
+  // Device-target loss: targets already on the device (no H2D upload).
+  void DoCalculateLossDevice(const float *DeviceTargets) {
+    if constexpr (!std::is_same_v<typename Traits::Loss, NoLoss>) {
+      static_assert(alloc::IsDeviceResidentV<UnitAllocator>,
+                    "DoCalculateLossDevice requires the device-resident backend");
+      gpu::DoCalculateLossOnDevice<typename Traits::Loss>(
+          UnitAlloc.view(), OutputRange, DeviceTargets, OutputRange.Size(),
+          Globals);
+    }
+  }
+
+  // Device pointer to the output activations (for zero-copy export to torch).
+  const float *GetOutputDevice() const {
+    static_assert(alloc::IsDeviceResidentV<UnitAllocator>,
+                  "GetOutputDevice requires the device-resident backend");
+    return UnitAlloc.view().template GetArrayFor<ActivationTag>() +
+           OutputRange.Begin;
+  }
+#endif
 
   void DoCalculateLoss(std::span<const float> Targets) {
     if constexpr (std::is_same_v<typename Traits::Loss, NoLoss>)
@@ -244,23 +229,26 @@ public:
     else {
       if (Targets.empty())
         return;
-      if constexpr (HasCuda && alloc::IsDeviceResidentV<UnitAllocator>) {
-        // Device-resident: upload the small target slice and run the loss on the
-        // device view. Activation and BackwardAcc stay device-resident (no D2H
-        // of the outputs, no H2D of the gradient), and no host code interleaves
-        // between forward and backward -- see ADR-007/008.
+      // Device-resident: upload the small target slice and run the loss on the
+      // device view (no D2H of outputs, no H2D of the gradient, no host code
+      // between forward and backward). Guarded by #ifdef so the CPU build never
+      // names cuda* / the device buffer.
+#ifdef PLASTIX_HAS_CUDA
+      if constexpr (alloc::IsDeviceResidentV<UnitAllocator>) {
         const size_t N = Targets.size();
         if (!DeviceTargets_)
-          PLASTIX_CUDA_CHECK(cudaMalloc(reinterpret_cast<void **>(&DeviceTargets_),
-                                        OutputRange.Size() * sizeof(float)));
+          PLASTIX_CUDA_CHECK(cudaMalloc(
+              reinterpret_cast<void **>(&DeviceTargets_),
+              OutputRange.Size() * sizeof(float)));
         PLASTIX_CUDA_CHECK(cudaMemcpy(DeviceTargets_, Targets.data(),
                                       N * sizeof(float),
                                       cudaMemcpyHostToDevice));
         gpu::DoCalculateLossOnDevice<typename Traits::Loss>(
             UnitAlloc.view(), OutputRange, DeviceTargets_, N, Globals);
-      } else {
-        Traits::Loss::CalculateLoss(UnitAlloc, OutputRange, Targets, *Globals);
+        return;
       }
+#endif
+      Traits::Loss::CalculateLoss(UnitAlloc, OutputRange, Targets, *Globals);
     }
   }
 
@@ -479,6 +467,62 @@ private:
     PLASTIX_CUDA_CHECK(cudaStreamSynchronize(CaptureStream_));
   }
 #endif
+
+  // Forward kernel dispatch shared by DoForwardPass (host input) and
+  // DoForwardPassDevice (device input). The CUDA-graph path is entirely under
+  // PLASTIX_HAS_CUDA so the CPU build never names graph-only members.
+  void RunForward() {
+    using FP = typename Traits::ForwardPass;
+    using Acc = typename FP::Accumulator;
+#ifdef PLASTIX_HAS_CUDA
+    constexpr bool UseGraph = std::is_same_v<Acc, float> &&
+                              WantsCudaGraph<Traits>() &&
+                              alloc::IsDeviceResidentV<UnitAllocator>;
+    if constexpr (UseGraph) {
+      if constexpr (Traits::Model == Propagation::Topological) {
+        if (NeedsResort) {
+          SortConnectionsByLevel();
+          ForwardGraph_.Reset(); // level ranges changed; re-capture
+        }
+        LaunchForwardGraph([&](void *S, bool Sync) {
+          gpu::DoForwardTopological<FP>(UnitAlloc, ConnAlloc, Globals, NumInput,
+                                        Ranges, NumLevels, S, Sync);
+        });
+      } else if constexpr (Traits::ReverseAdjForward) {
+        LaunchForwardGraph([&](void *S, bool Sync) {
+          gpu::DoForwardReverseAdj<FP>(UnitAlloc, ConnAlloc, Globals, NumInput,
+                                       RevOffsets, RevIncoming, S, Sync);
+        });
+      } else {
+        LaunchForwardGraph([&](void *S, bool Sync) {
+          gpu::DoForwardPipeline<FP>(UnitAlloc, ConnAlloc, Globals, NumInput, S,
+                                     Sync);
+        });
+      }
+      return;
+    }
+#endif
+    // Eager GPU or CPU path.
+    if constexpr (Traits::Model == Propagation::Topological) {
+      if (NeedsResort)
+        SortConnectionsByLevel();
+      if constexpr (HasCuda && std::is_same_v<Acc, float>)
+        gpu::DoForwardTopological<FP>(UnitAlloc, ConnAlloc, Globals, NumInput,
+                                      Ranges, NumLevels);
+      else
+        cpu::DoForwardTopological<FP>(UnitAlloc, ConnAlloc, Globals, NumInput,
+                                      Ranges, NumLevels);
+    } else {
+      if constexpr (HasCuda && std::is_same_v<Acc, float> &&
+                    Traits::ReverseAdjForward)
+        gpu::DoForwardReverseAdj<FP>(UnitAlloc, ConnAlloc, Globals, NumInput,
+                                     RevOffsets, RevIncoming);
+      else if constexpr (HasCuda && std::is_same_v<Acc, float>)
+        gpu::DoForwardPipeline<FP>(UnitAlloc, ConnAlloc, Globals, NumInput);
+      else
+        cpu::DoForwardPipeline<FP>(UnitAlloc, ConnAlloc, Globals, NumInput);
+    }
+  }
 
   void RecomputeLevels() {
     if constexpr (HasCuda)
