@@ -94,6 +94,21 @@ is cheap even per step).
   teardown) and `--tool initcheck` (uninitialized device reads -- catches any
   read-before-write the old `cudaMemset` was masking); valgrind for host staging.
 
+## Measured (cdol01, RTX 5000 Ada, DeepR, 401k dense candidates / ~66k live edges, steady-state ms/step)
+
+| backend | ms/step | vs CPU |
+| --- | --- | --- |
+| CPU (mmap, host loops) | 4.513 | 1x |
+| GPU managed (UVM migration) | 0.352 | 12.8x |
+| GPU device-resident, host I/O | 0.253 | 17.8x |
+| GPU device-resident + graph + device I/O | 0.250 | 18.1x |
+
+Device-resident vs managed is a real ~28% wall-time win (removing UVM migration),
+and unlocks the ~18x GPU-over-CPU crossover at scale. The CUDA-graph + device-I/O
+layer is marginal at this scale (only the forward pass is captured; the ~10 other
+per-phase launches + syncs dominate) -- its payoff needs whole-DoStep capture.
+At toy scale (few hundred edges) the GPU is launch-bound and CPU wins.
+
 ## Consequences
 
 - ~2x arena memory (device buffer + host staging). Accepted (Ayrton: not worried
