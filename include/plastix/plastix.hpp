@@ -17,6 +17,7 @@
 #include "plastix/macros.hpp"
 
 #ifdef PLASTIX_HAS_CUDA
+#include "plastix/cuda_graph.hpp"
 #include "plastix/device_alloc.hpp"
 #include <cuda_runtime.h>
 #endif
@@ -150,6 +151,10 @@ public:
       delete[] RevIncoming;
 #endif
     }
+#ifdef PLASTIX_HAS_CUDA
+    if (CaptureStream_)
+      PLASTIX_CUDA_CHECK(cudaStreamDestroy(CaptureStream_));
+#endif
   }
 
   // Rebuild the reverse-adjacency CSR (incoming edges grouped by destination
@@ -181,20 +186,45 @@ public:
     if constexpr (alloc::IsDeviceResidentV<UnitAllocator>)
       UnitAlloc.template PushFieldSlice<ActivationTag>(0, NumInput);
 
+    // Opt-in CUDA-graph capture of the forward kernel sequence (ADR-008 P0):
+    // requires the device-resident backend (stable device pointers; the input
+    // slice is refreshed above, before the graph replays).
+    constexpr bool UseGraph = HasCuda && std::is_same_v<Acc, float> &&
+                              WantsCudaGraph<Traits>() &&
+                              alloc::IsDeviceResidentV<UnitAllocator>;
+
     // GPU kernels currently require Accumulator=float (atomicAdd<float> is
     // the only supported Combine). Non-float accumulators run the host loop.
     if constexpr (Traits::Model == Propagation::Topological) {
-      if (NeedsResort)
+      if (NeedsResort) {
         SortConnectionsByLevel();
-      if constexpr (HasCuda && std::is_same_v<Acc, float>)
+        if constexpr (UseGraph)
+          ForwardGraph_.Reset(); // level ranges changed; re-capture
+      }
+      if constexpr (UseGraph)
+        LaunchForwardGraph([&](void *S, bool Sync) {
+          gpu::DoForwardTopological<FP>(UnitAlloc, ConnAlloc, Globals, NumInput,
+                                        Ranges, NumLevels, S, Sync);
+        });
+      else if constexpr (HasCuda && std::is_same_v<Acc, float>)
         gpu::DoForwardTopological<FP>(UnitAlloc, ConnAlloc, Globals, NumInput,
                                       Ranges, NumLevels);
       else
         cpu::DoForwardTopological<FP>(UnitAlloc, ConnAlloc, Globals, NumInput,
                                       Ranges, NumLevels);
     } else {
-      if constexpr (HasCuda && std::is_same_v<Acc, float> &&
-                    Traits::ReverseAdjForward)
+      if constexpr (UseGraph && Traits::ReverseAdjForward)
+        LaunchForwardGraph([&](void *S, bool Sync) {
+          gpu::DoForwardReverseAdj<FP>(UnitAlloc, ConnAlloc, Globals, NumInput,
+                                       RevOffsets, RevIncoming, S, Sync);
+        });
+      else if constexpr (UseGraph)
+        LaunchForwardGraph([&](void *S, bool Sync) {
+          gpu::DoForwardPipeline<FP>(UnitAlloc, ConnAlloc, Globals, NumInput, S,
+                                     Sync);
+        });
+      else if constexpr (HasCuda && std::is_same_v<Acc, float> &&
+                         Traits::ReverseAdjForward)
         gpu::DoForwardReverseAdj<FP>(UnitAlloc, ConnAlloc, Globals, NumInput,
                                      RevOffsets, RevIncoming);
       else if constexpr (HasCuda && std::is_same_v<Acc, float>)
@@ -411,6 +441,23 @@ public:
   const GlobalState &Global() const { return *Globals; }
 
 private:
+#ifdef PLASTIX_HAS_CUDA
+  // Capture the forward kernel sequence once (or after a unit-count change) and
+  // replay it, amortizing per-launch overhead (ADR-008 P0). RunFwd(stream, sync)
+  // issues the forward kernels on the given stream; during capture sync=false.
+  template <class RunFwd> void LaunchForwardGraph(RunFwd &&Run) {
+    if (!CaptureStream_)
+      PLASTIX_CUDA_CHECK(cudaStreamCreate(&CaptureStream_));
+    if (!ForwardGraph_.ready() || ForwardGraphSize_ != UnitAlloc.Size()) {
+      ForwardGraph_.Capture(CaptureStream_,
+                            [&] { Run(CaptureStream_, /*Sync=*/false); });
+      ForwardGraphSize_ = UnitAlloc.Size();
+    }
+    ForwardGraph_.Launch(CaptureStream_);
+    PLASTIX_CUDA_CHECK(cudaStreamSynchronize(CaptureStream_));
+  }
+#endif
+
   void RecomputeLevels() {
     if constexpr (HasCuda)
       gpu::RecomputeLevels(UnitAlloc, ConnAlloc, KahnAlloc, NumInput);
@@ -478,6 +525,14 @@ private:
   // when Traits::ReverseAdjForward.
   std::uint32_t *RevOffsets = nullptr;
   std::uint32_t *RevIncoming = nullptr;
+
+#ifdef PLASTIX_HAS_CUDA
+  // Opt-in forward-pass CUDA graph (ADR-008 P0). Captured lazily on the first
+  // forward and replayed while the unit count is unchanged.
+  gpu::CudaGraph ForwardGraph_;
+  cudaStream_t CaptureStream_ = nullptr;
+  size_t ForwardGraphSize_ = static_cast<size_t>(-1);
+#endif
 };
 
 } // namespace plastix

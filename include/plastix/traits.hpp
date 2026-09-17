@@ -286,6 +286,21 @@ template <typename T> consteval bool WantsDeviceResident() {
     return false;
 }
 
+// Opt into CUDA-graph capture of the (device-resident) forward pass: a traits
+// type sets `static constexpr bool UseCudaGraph = true`. Assumes static topology
+// while the graph is live (re-captured on a unit-count change); absent/false
+// keeps eager launches. Only takes effect with the device-resident backend.
+template <typename T>
+concept HasCudaGraphFlag = requires {
+  { T::UseCudaGraph } -> std::convertible_to<bool>;
+};
+template <typename T> consteval bool WantsCudaGraph() {
+  if constexpr (HasCudaGraphFlag<T>)
+    return T::UseCudaGraph;
+  else
+    return false;
+}
+
 // Maps the selection bool to an allocator template usable as a
 // template-template argument. The DeviceResidentSOA branch is CUDA-only.
 template <bool DeviceResident> struct AllocSelector {

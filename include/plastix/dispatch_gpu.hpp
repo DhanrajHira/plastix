@@ -33,7 +33,9 @@ template <typename FP, typename UA, typename CA, typename Globals,
           typename RangesT>
 inline void DoForwardTopological(UA &UnitAlloc, CA &ConnAlloc, Globals *G,
                                  size_t NumInput, const RangesT &Ranges,
-                                 uint16_t NumLevels) {
+                                 uint16_t NumLevels, void *Stream = nullptr,
+                                 bool Sync = true) {
+  cudaStream_t S = static_cast<cudaStream_t>(Stream);
   size_t NumUnits = UnitAlloc.Size();
   for (uint16_t L = 1; L <= NumLevels; ++L) {
     uint32_t Begin = Ranges[L - 1].Begin;
@@ -41,33 +43,36 @@ inline void DoForwardTopological(UA &UnitAlloc, CA &ConnAlloc, Globals *G,
     if (End > Begin) {
       unsigned Block = cuda::DefaultBlockSize;
       unsigned Grid = static_cast<unsigned>(cuda::GridSize(End - Begin, Block));
-      cuda::ForwardConnSweepLevelKernel<FP>
-          <<<Grid, Block>>>(Begin, End, UnitAlloc.view(), ConnAlloc.view(), G);
+      cuda::ForwardConnSweepLevelKernel<FP><<<Grid, Block, 0, S>>>(
+          Begin, End, UnitAlloc.view(), ConnAlloc.view(), G);
       PLASTIX_CUDA_CHECK_KERNEL();
     }
     if (NumUnits > NumInput) {
       unsigned Block = cuda::DefaultBlockSize;
       unsigned Grid =
           static_cast<unsigned>(cuda::GridSize(NumUnits - NumInput, Block));
-      cuda::ForwardUnitApplyLevelKernel<FP>
-          <<<Grid, Block>>>(NumInput, NumUnits, L, UnitAlloc.view(), G);
+      cuda::ForwardUnitApplyLevelKernel<FP><<<Grid, Block, 0, S>>>(
+          NumInput, NumUnits, L, UnitAlloc.view(), G);
       PLASTIX_CUDA_CHECK_KERNEL();
     }
   }
-  PLASTIX_CUDA_CHECK(cudaDeviceSynchronize());
+  if (Sync)
+    PLASTIX_CUDA_CHECK(cudaDeviceSynchronize());
 }
 
 // Forward pass -- Pipeline propagation
 
 template <typename FP, typename UA, typename CA, typename Globals>
 inline void DoForwardPipeline(UA &UnitAlloc, CA &ConnAlloc, Globals *G,
-                              size_t NumInput) {
+                              size_t NumInput, void *Stream = nullptr,
+                              bool Sync = true) {
+  cudaStream_t S = static_cast<cudaStream_t>(Stream);
   size_t NumConns = ConnAlloc.Size();
   if (NumConns > 0) {
     unsigned Block = cuda::DefaultBlockSize;
     unsigned Grid = static_cast<unsigned>(cuda::GridSize(NumConns, Block));
-    cuda::ForwardConnSweepKernel<FP>
-        <<<Grid, Block>>>(NumConns, UnitAlloc.view(), ConnAlloc.view(), G);
+    cuda::ForwardConnSweepKernel<FP><<<Grid, Block, 0, S>>>(
+        NumConns, UnitAlloc.view(), ConnAlloc.view(), G);
     PLASTIX_CUDA_CHECK_KERNEL();
   }
   size_t NumUnits = UnitAlloc.Size();
@@ -75,11 +80,12 @@ inline void DoForwardPipeline(UA &UnitAlloc, CA &ConnAlloc, Globals *G,
     unsigned Block = cuda::DefaultBlockSize;
     unsigned Grid =
         static_cast<unsigned>(cuda::GridSize(NumUnits - NumInput, Block));
-    cuda::ForwardUnitApplyKernel<FP>
-        <<<Grid, Block>>>(NumInput, NumUnits, UnitAlloc.view(), G);
+    cuda::ForwardUnitApplyKernel<FP><<<Grid, Block, 0, S>>>(
+        NumInput, NumUnits, UnitAlloc.view(), G);
     PLASTIX_CUDA_CHECK_KERNEL();
   }
-  PLASTIX_CUDA_CHECK(cudaDeviceSynchronize());
+  if (Sync)
+    PLASTIX_CUDA_CHECK(cudaDeviceSynchronize());
 }
 
 // Pipeline forward via per-unit reduction over a reverse-adjacency CSR:
@@ -87,23 +93,26 @@ inline void DoForwardPipeline(UA &UnitAlloc, CA &ConnAlloc, Globals *G,
 template <typename FP, typename UA, typename CA, typename Globals>
 inline void DoForwardReverseAdj(UA &UnitAlloc, CA &ConnAlloc, Globals *G,
                                 size_t NumInput, const std::uint32_t *Offsets,
-                                const std::uint32_t *Incoming) {
+                                const std::uint32_t *Incoming,
+                                void *Stream = nullptr, bool Sync = true) {
+  cudaStream_t S = static_cast<cudaStream_t>(Stream);
   size_t NumUnits = UnitAlloc.Size();
   if (NumUnits > NumInput) {
     constexpr unsigned RedBlock = 256; // must match the kernel's __shared__ Sh
     unsigned Grid = static_cast<unsigned>(NumUnits - NumInput);
-    cuda::ForwardPerUnitReduceKernel<FP>
-        <<<Grid, RedBlock>>>(NumInput, NumUnits, Offsets, Incoming,
-                             UnitAlloc.view(), ConnAlloc.view(), G);
+    cuda::ForwardPerUnitReduceKernel<FP><<<Grid, RedBlock, 0, S>>>(
+        NumInput, NumUnits, Offsets, Incoming, UnitAlloc.view(),
+        ConnAlloc.view(), G);
     PLASTIX_CUDA_CHECK_KERNEL();
     unsigned Block = cuda::DefaultBlockSize;
     unsigned AGrid =
         static_cast<unsigned>(cuda::GridSize(NumUnits - NumInput, Block));
-    cuda::ForwardUnitApplyKernel<FP>
-        <<<AGrid, Block>>>(NumInput, NumUnits, UnitAlloc.view(), G);
+    cuda::ForwardUnitApplyKernel<FP><<<AGrid, Block, 0, S>>>(
+        NumInput, NumUnits, UnitAlloc.view(), G);
     PLASTIX_CUDA_CHECK_KERNEL();
   }
-  PLASTIX_CUDA_CHECK(cudaDeviceSynchronize());
+  if (Sync)
+    PLASTIX_CUDA_CHECK(cudaDeviceSynchronize());
 }
 
 // Backward pass -- Topological propagation
@@ -398,14 +407,16 @@ inline void DoResetGlobalOnDevice(G *Globals) {
 template <typename FP, typename UA, typename CA, typename Globals,
           typename RangesT>
 inline void DoForwardTopological(UA &, CA &, Globals *, size_t, const RangesT &,
-                                 uint16_t) {}
+                                 uint16_t, void * = nullptr, bool = true) {}
 
 template <typename FP, typename UA, typename CA, typename Globals>
-inline void DoForwardPipeline(UA &, CA &, Globals *, size_t) {}
+inline void DoForwardPipeline(UA &, CA &, Globals *, size_t, void * = nullptr,
+                              bool = true) {}
 
 template <typename FP, typename UA, typename CA, typename Globals>
 inline void DoForwardReverseAdj(UA &, CA &, Globals *, size_t,
-                                const std::uint32_t *, const std::uint32_t *) {}
+                                const std::uint32_t *, const std::uint32_t *,
+                                void * = nullptr, bool = true) {}
 
 template <typename BP, typename UA, typename CA, typename Globals,
           typename RangesT>
